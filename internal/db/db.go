@@ -205,7 +205,19 @@ func (d *DB) initData() error {
 			// Homebrew basedir, which does not exist here.
 			args = append(args, "--basedir="+d.Base)
 		}
-		cmd := exec.Command(tool, args...)
+		var cmd *exec.Cmd
+		if len(d.env()) > 0 {
+			// mariadb-install-db is a shell script whose shebang runs
+			// under SIP-restricted /bin/sh, and dyld strips DYLD_LIBRARY_PATH
+			// from restricted processes. Re-export it inside the shell so
+			// the bootstrap mariadbd child inherits it.
+			cmd = exec.Command("/bin/sh", "-c",
+				`export DYLD_LIBRARY_PATH="$1"; shift; exec "$@"`,
+				"sh", os.Getenv("DYLD_LIBRARY_PATH"), tool)
+			cmd.Args = append(cmd.Args, args...)
+		} else {
+			cmd = exec.Command(tool, args...)
+		}
 		cmd.Env = d.env()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
