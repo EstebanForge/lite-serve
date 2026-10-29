@@ -1,0 +1,82 @@
+package site
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func mk(t *testing.T, dirs ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestDiscoverPublicDocroot(t *testing.T) {
+	root := mk(t, "sites/demo/public")
+	if err := os.WriteFile(filepath.Join(root, "sites/demo/public/index.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sites, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sites) != 1 {
+		t.Fatalf("want 1 site, got %d", len(sites))
+	}
+	s := sites[0]
+	if s.Host() != "demo.localhost" {
+		t.Errorf("host: got %s", s.Host())
+	}
+	if s.DocRoot != filepath.Join(root, "sites/demo/public") {
+		t.Errorf("docroot: got %s", s.DocRoot)
+	}
+	if s.WordPress {
+		t.Error("plain php dir flagged as wordpress")
+	}
+}
+
+func TestDiscoverWordPressDetection(t *testing.T) {
+	root := mk(t, "sites/blog")
+	if err := os.WriteFile(filepath.Join(root, "sites/blog/wp-load.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sites, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sites[0].WordPress {
+		t.Error("wp-load.php present but site not flagged wordpress")
+	}
+}
+
+func TestDiscoverSortedAndSkipsFiles(t *testing.T) {
+	root := mk(t, "sites/bbb/public", "sites/aaa/public", "sites/README.md")
+	// README.md is a file, not a dir: mk makes it as dir; fix by writing a real file
+	os.RemoveAll(filepath.Join(root, "sites/README.md"))
+	if err := os.WriteFile(filepath.Join(root, "sites/notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sites, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sites) != 2 || sites[0].Name != "aaa" || sites[1].Name != "bbb" {
+		t.Fatalf("want [aaa bbb], got %+v", sites)
+	}
+}
+
+func TestDiscoverErrors(t *testing.T) {
+	if _, err := Discover(t.TempDir()); err == nil {
+		t.Error("missing sites dir: want error")
+	}
+	root := mk(t, "sites/empty")
+	if _, err := Discover(root); err == nil {
+		t.Error("empty sites dir: want error")
+	}
+}
