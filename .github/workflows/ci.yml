@@ -29,6 +29,11 @@ jobs:
         include:
           - {goos: linux, goarch: amd64, asset: lserve-linux-amd64}
           - {goos: darwin, goarch: arm64, asset: lserve-darwin-arm64}
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+      ASSET: ${{ matrix.asset }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -36,13 +41,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: go build -buildvcs=false -trimpath -o "${{ matrix.asset }}" ./cmd/lserve
+        run: go build -buildvcs=false -trimpath -o "$ASSET" ./cmd/lserve
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: ${{ env.ASSET }}
           if-no-files-found: error
