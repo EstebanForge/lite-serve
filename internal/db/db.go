@@ -198,8 +198,14 @@ func (d *DB) initData() error {
 		} else if p, err := exec.LookPath("mysql_install_db"); err == nil {
 			tool = p
 		}
-		cmd := exec.Command(tool, "--datadir="+d.Data,
-			"--auth-root-authentication-method=normal")
+		args := []string{"--datadir=" + d.Data,
+			"--auth-root-authentication-method=normal"}
+		if d.Base != "" {
+			// The script searches for helpers from its compiled-in
+			// Homebrew basedir, which does not exist here.
+			args = append(args, "--basedir="+d.Base)
+		}
+		cmd := exec.Command(tool, args...)
 		cmd.Env = d.env()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
