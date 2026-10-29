@@ -26,10 +26,10 @@ func Dir() (Home, error) {
 	return Home{filepath.Join(h, ".local", "state", "lite-devenv")}, nil
 }
 
-func (h Home) Root() string  { return h.root }
-func (h Home) Bin() string   { return filepath.Join(h.root, "bin") }
-func (h Home) Run() string   { return filepath.Join(h.root, "run") }
-func (h Home) Log() string   { return filepath.Join(h.root, "log") }
+func (h Home) Root() string { return h.root }
+func (h Home) Bin() string  { return filepath.Join(h.root, "bin") }
+func (h Home) Run() string  { return filepath.Join(h.root, "run") }
+func (h Home) Log() string  { return filepath.Join(h.root, "log") }
 func (h Home) FrankenPHP() string {
 	return filepath.Join(h.Bin(), "frankenphp")
 }

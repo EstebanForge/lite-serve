@@ -19,7 +19,7 @@ func TestRenderBasicShape(t *testing.T) {
 		"bind 127.0.0.1 ::1",
 		"tls internal",
 		`root * "/srv/demo/public"`,
-		"php_server\n", // non-WP: bare directive, no env block
+		"php_server\n",                 // non-WP: bare directive, no env block
 		"https://demo.localhost:443\"", // must not appear: port is 8443
 	} {
 		if want == "https://demo.localhost:443\"" {

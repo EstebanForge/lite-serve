@@ -4,9 +4,11 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/EstebanForge/lite-devenv/internal/bin"
 	"github.com/EstebanForge/lite-devenv/internal/caddy"
@@ -39,7 +41,9 @@ func projectDB(projectDir string) string {
 	base := filepath.Base(projectDir)
 	var b strings.Builder
 	for _, r := range base {
-		if r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+		// Hyphens are legal in backticked MySQL identifiers; dropping
+		// them would collide "my-site" and "mysite" on one database.
+		if r == '_' || r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
 			b.WriteRune(r)
 		}
 	}
@@ -133,6 +137,21 @@ func runDB(d *db.DB, database string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: devenv db <client|import <dump.sql>|dump [file]|dsn>")
 	}
+	if args[0] == "dsn" {
+		fmt.Println(d.DSN(database))
+		return nil
+	}
+	// A db subcommand against a fresh project dir must work without a
+	// prior start: same install/start/ensure path, all idempotent.
+	if err := d.EnsureInstalled(); err != nil {
+		return err
+	}
+	if err := d.Start(); err != nil {
+		return err
+	}
+	if err := d.EnsureDatabase(database); err != nil {
+		return err
+	}
 	switch args[0] {
 	case "client":
 		extra := []string{}
@@ -153,9 +172,6 @@ func runDB(d *db.DB, database string, args []string) error {
 			return fmt.Errorf("usage: devenv db dump [file]")
 		}
 		return d.Dump(database, file)
-	case "dsn":
-		fmt.Println(d.DSN(database))
-		return nil
 	}
 	return fmt.Errorf("unknown db subcommand %q", args[0])
 }
@@ -184,8 +200,23 @@ func start(h home.Home, database string, sites []*site.Site, d *db.DB) error {
 	if err := os.WriteFile(caddyfile, []byte(cfg), 0o644); err != nil {
 		return err
 	}
-	if err := proc.Start(franken, h.Run(), filepath.Join(h.Log(), "frankenphp.log"), caddyfile, portEnvInt("DEVENV_HTTPS_PORT", 443)); err != nil {
+	if err := proc.Start(franken, h.Run(), filepath.Join(h.Log(), "frankenphp.log"), caddyfile); err != nil {
 		return err
+	}
+	// proc.Start confirms the process is alive, not that the port is
+	// bound; without this, the first request right after start races.
+	httpsPort := portEnvInt("DEVENV_HTTPS_PORT", 443)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(httpsPort)), 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("frankenphp not accepting connections on %d; see %s", httpsPort, filepath.Join(h.Log(), "frankenphp.log"))
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	fmt.Println("serving:")
 	for _, s := range sites {

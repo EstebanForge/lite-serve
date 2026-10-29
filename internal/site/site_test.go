@@ -71,6 +71,39 @@ func TestDiscoverSortedAndSkipsFiles(t *testing.T) {
 	}
 }
 
+func TestDiscoverSkipsHiddenAndFollowsSymlinks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sites/real/public"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sites/.hidden/public"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "sites/real"), filepath.Join(root, "sites/linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	sites, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, s := range sites {
+		names = append(names, s.Name)
+	}
+	// .hidden has no docroot and must not fail discovery; linked must
+	// resolve through the symlink.
+	if len(sites) != 2 || names[0] != "linked" || names[1] != "real" {
+		t.Fatalf("want [linked real], got %v", names)
+	}
+}
+
+func TestDiscoverRejectsBadNames(t *testing.T) {
+	root := mk(t, "sites/bad name/public", "sites/ok/public")
+	if _, err := Discover(root); err == nil {
+		t.Fatal("space in site name: want error")
+	}
+}
+
 func TestDiscoverErrors(t *testing.T) {
 	if _, err := Discover(t.TempDir()); err == nil {
 		t.Error("missing sites dir: want error")

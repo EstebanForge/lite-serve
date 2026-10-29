@@ -13,9 +13,9 @@ import (
 )
 
 type Site struct {
-	Name    string // directory name, becomes the subdomain
-	Root    string // absolute path to the site directory
-	DocRoot string // absolute path to the document root
+	Name      string // directory name, becomes the subdomain
+	Root      string // absolute path to the site directory
+	DocRoot   string // absolute path to the document root
 	WordPress bool
 }
 
@@ -30,8 +30,18 @@ func Discover(projectDir string) ([]*Site, error) {
 	}
 	var sites []*Site
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Hidden entries (.git, .DS_Store, editor droppings) are never
+		// sites; skipping keeps one bad entry from failing all sites.
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
+		}
+		// os.Stat follows symlinks, so linked-in project folders work.
+		info, err := os.Stat(filepath.Join(sitesDir, e.Name()))
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if !validName(e.Name()) {
+			return nil, fmt.Errorf("site %q: name must be a valid host label (letters, digits, hyphens; not starting or ending with a hyphen)", e.Name())
 		}
 		root := filepath.Join(sitesDir, e.Name())
 		doc, err := docroot(root)
@@ -54,6 +64,20 @@ func Discover(projectDir string) ([]*Site, error) {
 
 // Host is the served hostname for the site.
 func (s *Site) Host() string { return s.Name + ".localhost" }
+
+// validName enforces an RFC 1123 host label: directory names become
+// subdomains, so anything else breaks TLS SNI or the Caddyfile parse.
+func validName(name string) bool {
+	if len(name) == 0 || len(name) > 63 || name[0] == '-' || name[len(name)-1] == '-' {
+		return false
+	}
+	for _, r := range name {
+		if r != '-' && (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return true
+}
 
 func docroot(root string) (string, error) {
 	for _, d := range []string{"public", "web"} {

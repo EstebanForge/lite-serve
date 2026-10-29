@@ -44,9 +44,27 @@ func New(homeRoot, runDir, logDir string, port int) DB {
 	}
 }
 
-func (d DB) mysqld() string { return filepath.Join(d.Base, "bin", "mysqld") }
-func (d DB) mysql() string  { return filepath.Join(d.Base, "bin", "mysql") }
-func (d DB) dump() string   { return filepath.Join(d.Base, "bin", "mysqldump") }
+// Base == "" means a system install (macOS): bare names so
+// exec.Command resolves them from PATH; a joined path like "bin/mysqld"
+// would not be searched.
+func (d DB) mysqld() string {
+	if d.Base == "" {
+		return "mysqld"
+	}
+	return filepath.Join(d.Base, "bin", "mysqld")
+}
+func (d DB) mysql() string {
+	if d.Base == "" {
+		return "mysql"
+	}
+	return filepath.Join(d.Base, "bin", "mysql")
+}
+func (d DB) dump() string {
+	if d.Base == "" {
+		return "mysqldump"
+	}
+	return filepath.Join(d.Base, "bin", "mysqldump")
+}
 func (d DB) socket() string { return filepath.Join(d.Run, "mysql.sock") }
 func (d DB) pidfile() string {
 	return filepath.Join(d.Run, "mysqld.pid")
@@ -115,10 +133,13 @@ func (d *DB) Start() error {
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Drop any stale pidfile first: the wait loop reads it, and a dead
+	// old pid there would abort startup while the new daemon forks.
+	_ = os.Remove(d.pidfile())
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start mysqld: %w", err)
 	}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if d.ping() {
 			return nil
 		}
@@ -148,20 +169,34 @@ func (d *DB) Stop() error {
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		return err
 	}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if !d.live() {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("mysqld pid %d ignored SIGTERM", pid)
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		return err
+	}
+	for range 20 {
+		if !d.live() {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("mysqld pid %d ignored SIGKILL", pid)
 }
 
 // EnsureDatabase creates the project database if absent. Root over
 // loopback with empty password (initialize-insecure), dev-only.
 func (d *DB) EnsureDatabase(name string) error {
-	_, err := d.exec("CREATE DATABASE IF NOT EXISTS `" + name + "`")
-	return err
+	out, err := d.exec("CREATE DATABASE IF NOT EXISTS `" + name + "`")
+	if err != nil {
+		// ExitError alone is bare "exit status 1"; the MySQL message
+		// is in the output.
+		return fmt.Errorf("create database %s: %v: %s", name, err, strings.TrimSpace(out))
+	}
+	return nil
 }
 
 // Exec runs the mysql client with args and connects to the project DB.
@@ -195,41 +230,58 @@ func (d *DB) Import(database, file string) error {
 	return cmd.Run()
 }
 
-// Dump writes the project database to file ("-" for stdout).
+// Dump writes the project database to file ("-" for stdout). Files are
+// written via a temp sibling and renamed only on success, so a failed
+// dump never truncates an existing backup.
 func (d *DB) Dump(database, file string) error {
 	args := []string{
 		"-h", "127.0.0.1", "-P", strconv.Itoa(d.Port),
 		"-u", "root", "--protocol=TCP", database,
 	}
-	var dst *os.File
 	if file == "-" {
-		dst = os.Stdout
-	} else {
-		f, err := os.Create(file)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		dst = f
+		cmd := exec.Command(d.dump(), args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+	tmp := file + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
 	}
 	cmd := exec.Command(d.dump(), args...)
-	cmd.Stdout = dst
+	cmd.Stdout = f
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, file)
 }
 
 func (d *DB) DSN(database string) string {
 	return fmt.Sprintf("mysql://root@127.0.0.1:%d/%s", d.Port, database)
 }
 
-// pid returns the pidfile pid, 0 when absent or stale.
+// pid returns the pidfile pid, 0 when absent or stale. Like the web
+// server lifecycle, identity is verified: a bare kill(pid, 0) check
+// could SIGTERM an unrelated process that reused the pid.
 func (d *DB) pid() int {
 	data, err := os.ReadFile(d.pidfile())
 	if err != nil {
 		return 0
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || !pidAlive(pid) {
+	if err != nil {
+		return 0
+	}
+	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil || !strings.Contains(string(out), "mysqld") {
 		return 0
 	}
 	return pid

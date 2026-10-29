@@ -20,7 +20,7 @@ var ErrNotRunning = errors.New("not running")
 
 // Start launches frankenphp with the given Caddyfile, detached from the
 // calling terminal, logging to logFile. Refuses when already live.
-func Start(bin, runDir, logFile, caddyfile string, httpsPort int) error {
+func Start(bin, runDir, logFile, caddyfile string) error {
 	if _, err := pidLive(runDir, bin); err == nil {
 		return fmt.Errorf("already running (pidfile %s)", pidfile(runDir))
 	}
@@ -44,13 +44,20 @@ func Start(bin, runDir, logFile, caddyfile string, httpsPort int) error {
 		return err
 	}
 	// frankenphp validates the Caddyfile and binds the ports before it
-	// daemonizes its workers; a few hundred ms is enough to catch a bad
-	// config or a port conflict and report it instead of a silent death.
-	time.Sleep(700 * time.Millisecond)
-	if _, err := pidLive(runDir, bin); err != nil {
-		return fmt.Errorf("frankenphp exited right after start; see %s", logFile)
+	// daemonizes its workers; poll so a bad config or a port conflict is
+	// reported instead of a silent death. The child is never reaped, so
+	// a crashed frankenphp is a zombie: pidLive must reject zombies or
+	// this loop would see it as alive.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := pidLive(runDir, bin); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("frankenphp exited right after start; see %s", logFile)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	return nil
 }
 
 // Stop signals the live frankenphp and waits for it to die.
@@ -63,14 +70,25 @@ func Stop(runDir, bin string) error {
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		return err
 	}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if err := syscall.Kill(pid, 0); err != nil {
 			_ = os.Remove(pidfile(runDir))
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("pid %d ignored SIGTERM", pid)
+	// Uncooperative: escalate so stop never leaves a daemon behind.
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		return err
+	}
+	for range 20 {
+		if err := syscall.Kill(pid, 0); err != nil {
+			_ = os.Remove(pidfile(runDir))
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("pid %d ignored SIGKILL", pid)
 }
 
 // PID returns the live frankenphp pid, or ErrNotRunning.
@@ -93,9 +111,11 @@ func pidLive(runDir, bin string) (int, error) {
 	}
 	// /proc is Linux-only; ps works on both Linux and macOS. Identity
 	// check matters because a stale pidfile can point at an unrelated
-	// process that reused the pid.
-	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil || !strings.Contains(string(out), "frankenphp") {
+	// process that reused the pid. The stat field rejects zombies, which
+	// this package never reaps after cmd.Start.
+	out, err := exec.Command("ps", "-o", "stat=", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	fields := strings.Fields(string(out))
+	if err != nil || len(fields) < 2 || strings.HasPrefix(fields[0], "Z") || !strings.Contains(fields[1], filepath.Base(bin)) {
 		_ = os.Remove(pidfile(runDir))
 		return 0, ErrNotRunning
 	}

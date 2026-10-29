@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 const frankenVersion = "v1.13.4"
@@ -46,12 +47,12 @@ func frankenAsset(goos, goarch string) (asset, error) {
 // downloading it on first use.
 func FrankenPHP(binDir string) (string, error) {
 	dest := filepath.Join(binDir, "frankenphp")
-	if isVerified(dest, frankenAssets[runtime.GOOS+"-"+runtime.GOARCH].sha256) {
-		return dest, nil
-	}
 	a, err := frankenAsset(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return "", err
+	}
+	if isVerified(dest, a.sha256) {
+		return dest, nil
 	}
 	if err := downloadVerified(dest, a.url, a.sha256); err != nil {
 		return "", fmt.Errorf("frankenphp: %w", err)
@@ -85,12 +86,17 @@ func isVerified(dest, wantSHA string) bool {
 // the result unless its sha256 matches. Partial downloads never replace
 // an existing verified binary.
 func downloadVerified(dest, url, wantSHA string) error {
-	tmp := dest + ".tmp"
+	// The .tmp suffix carries the pid so two concurrent downloads never
+	// write the same file.
+	tmp := fmt.Sprintf("%s.%d.tmp", dest, os.Getpid())
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
-	resp, err := http.Get(url)
+	// These assets are 50-200 MB; DefaultClient has no timeout and would
+	// hang forever on a stalled connection.
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
 		out.Close()
 		return err
