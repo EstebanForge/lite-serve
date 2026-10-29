@@ -7,6 +7,7 @@
 package db
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -196,38 +197,44 @@ func (d *DB) initData() error {
 		return err
 	}
 	if d.flavor == "mariadb" {
-		tool := "mariadb-install-db"
-		if d.Base != "" {
-			tool = filepath.Join(d.Base, "bin", "mariadb-install-db")
-		} else if p, err := exec.LookPath("mysql_install_db"); err == nil {
-			tool = p
+		// Bootstrap directly instead of via mariadb-install-db: that
+		// script's shebang runs under SIP-restricted /bin/sh, which
+		// strips DYLD_LIBRARY_PATH from every process in its chain.
+		// Spawning mariadbd from Go keeps the library env intact.
+		sqlDir := filepath.Join(d.Base, "share", "mysql")
+		var sql bytes.Buffer
+		sql.WriteString("create database if not exists mysql;\nuse mysql;\n")
+		sql.WriteString("SET @auth_root_socket=NULL;\n")
+		for _, name := range []string{
+			"mariadb_system_tables.sql",
+			"mariadb_performance_tables.sql",
+			"mariadb_system_tables_data.sql",
+			"fill_help_tables.sql",
+			"maria_add_gis_sp_bootstrap.sql",
+			"mariadb_sys_schema.sql",
+			"mariadb_test_db.sql",
+		} {
+			b, err := os.ReadFile(filepath.Join(sqlDir, name))
+			if err != nil {
+				return fmt.Errorf("bootstrap sql: %w", err)
+			}
+			sql.Write(b)
+			sql.WriteByte('\n')
 		}
-		args := []string{"--datadir=" + d.Data,
-			"--auth-root-authentication-method=normal"}
-		if d.Base != "" {
-			// The script searches for helpers from its compiled-in
-			// Homebrew basedir, which does not exist here.
-			args = append(args, "--basedir="+d.Base)
-		}
-		var cmd *exec.Cmd
-		if len(d.env()) > 0 {
-			// mariadb-install-db is a shell script whose shebang runs
-			// under SIP-restricted /bin/sh, and dyld strips DYLD_LIBRARY_PATH
-			// from restricted processes. Re-export it inside the shell so
-			// the bootstrap mariadbd child inherits it.
-			cmd = exec.Command("/bin/sh", "-c",
-				`export DYLD_LIBRARY_PATH="$1"; shift; exec "$@"`,
-				"sh", d.dyld(), tool)
-			cmd.Args = append(cmd.Args, args...)
-		} else {
-			cmd = exec.Command(tool, args...)
-		}
+		cmd := exec.Command(d.mysqld(), "--no-defaults", "--bootstrap",
+			"--basedir="+d.Base, "--datadir="+d.Data,
+			"--lc-messages-dir="+filepath.Join(d.Base, "share", "mysql"),
+			"--plugin-dir="+filepath.Join(d.Base, "lib", "plugin"),
+			"--max_allowed_packet=8M", "--net_buffer_length=16K")
 		cmd.Env = d.env()
+		cmd.Stdin = &sql
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("mariadb-install-db: %v: %s", err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("mariadbd --bootstrap: %v: %s", err, strings.TrimSpace(string(out)))
 		}
-		return nil
+		// The script stamps this file after a successful install.
+		return os.WriteFile(filepath.Join(d.Data, "mariadb_upgrade_info"),
+			[]byte("13.0.2-MariaDB"), 0o644)
 	}
 	initCmd := exec.Command(d.mysqld(), "--initialize-insecure",
 		"--datadir="+d.Data, "--log-error-verbosity=1")
