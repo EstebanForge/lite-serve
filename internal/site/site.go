@@ -1,7 +1,9 @@
-// Package site discovers parked sites: every directory directly under
-// ./sites becomes <dirname>.localhost, with the docroot resolved by
-// first match of public/, web/, or the directory itself. A directory
-// containing wp-load.php is a WordPress site and gets URL env injection.
+// Package site discovers sites two ways. A ./sites directory parks
+// multiple sites: every child becomes <dirname>.localhost. Without
+// ./sites, the directory itself is served as one site named after its
+// basename. Docroot resolves by first match of public/, web/, or the
+// directory itself; wp-load.php marks a WordPress site for URL env
+// injection.
 package site
 
 import (
@@ -19,14 +21,28 @@ type Site struct {
 	WordPress bool
 }
 
-// Discover scans <project>/sites and returns one Site per directory,
-// sorted by name. A missing sites dir is an error: silently serving
-// nothing hides a wrong working directory.
+// Discover returns the sites of a project directory. With ./sites it
+// parks one site per child directory; without it the directory itself
+// is the single site, named by its basename.
 func Discover(projectDir string) ([]*Site, error) {
+	return DiscoverWithDocroot(projectDir, "")
+}
+
+// DiscoverWithDocroot is Discover for the single-site case with an
+// explicit docroot override (the --dir flag): the site is still named
+// after projectDir, but serves subdir instead. Overrides are rejected
+// when ./sites exists, where folder names already decide docroots.
+func DiscoverWithDocroot(projectDir, subdir string) ([]*Site, error) {
 	sitesDir := filepath.Join(projectDir, "sites")
+	if info, err := os.Stat(sitesDir); err != nil || !info.IsDir() {
+		return discoverSelf(projectDir, subdir)
+	}
+	if subdir != "" {
+		return nil, fmt.Errorf("--dir only applies when there is no ./sites directory")
+	}
 	entries, err := os.ReadDir(sitesDir)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read %s: %w (run lserve up from the project root)", sitesDir, err)
+		return nil, fmt.Errorf("cannot read %s: %w", sitesDir, err)
 	}
 	var sites []*Site
 	for _, e := range entries {
@@ -60,6 +76,41 @@ func Discover(projectDir string) ([]*Site, error) {
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Name < sites[j].Name })
 	return sites, nil
+}
+
+// discoverSelf serves projectDir itself as one site, named by its
+// basename. Guards against the two directories that would leak the
+// whole disk: / and the user's home.
+func discoverSelf(projectDir, subdir string) ([]*Site, error) {
+	abs, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	if home, herr := os.UserHomeDir(); herr == nil && (abs == home || abs == filepath.Dir(home)) {
+		return nil, fmt.Errorf("refusing to serve %s itself; run lserve up inside your project folder (or create a ./sites directory)", abs)
+	}
+	name := filepath.Base(abs)
+	if !validName(name) {
+		return nil, fmt.Errorf("directory name %q is not a valid host label; rename it or use a ./sites/<name> folder", name)
+	}
+	root := abs
+	if subdir != "" {
+		root = filepath.Join(abs, subdir)
+		info, err := os.Stat(root)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("--dir %q: not a directory in %s", subdir, abs)
+		}
+	}
+	doc, err := docroot(root)
+	if err != nil {
+		return nil, fmt.Errorf("site %s: %w", name, err)
+	}
+	return []*Site{{
+		Name:      name,
+		Root:      abs,
+		DocRoot:   doc,
+		WordPress: fileExists(filepath.Join(doc, "wp-load.php")),
+	}}, nil
 }
 
 // Host is the served hostname for the site.

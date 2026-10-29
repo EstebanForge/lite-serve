@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `lserve up` in any directory without a `./sites` folder now serves the directory itself as `<dirname>.localhost`; no project layout required
+- `lserve up --dir <sub>` serves a subfolder as the docroot (`lserve restart --dir <sub>` changes it later)
+
 ## 0.1.0 - 2026-10-29
 
 First release. Valet-style PHP development without Docker.

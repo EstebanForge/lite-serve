@@ -48,9 +48,9 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: lserve <command>
 
-  up        serve ./sites of the current directory (background daemon)
+  up        serve this directory (background daemon); up --dir <sub> serves <sub> as the docroot
   down      stop serving this directory (or: down <dir>)
-  restart   re-discover sites and reload (or: restart <dir>)
+  restart   re-discover and reload (or: restart [dir] [--dir <sub>])
   list      running projects: interactive picker, or a table when piped
   logs      tail the frankenphp log (or: logs mailpit)
   mailpit   mailpit menu: start|stop|restart|status (interactive when a TTY)
@@ -87,11 +87,26 @@ func run(cmd string, args []string) error {
 	}
 	switch cmd {
 	case "up":
-		return a.up(mustWd())
+		subdir, rest := dirFlag(args)
+		if len(rest) > 0 {
+			return a.up(rest[0], subdir)
+		}
+		return a.up(mustWd(), subdir)
 	case "down":
 		return a.down(targetDir(args))
 	case "restart":
-		return a.restart(targetDir(args))
+		subdir, rest := dirFlag(args)
+		if subdir != "" {
+			d := targetDir(rest)
+			// validate before persisting the new override
+			if _, err := site.DiscoverWithDocroot(d, subdir); err != nil {
+				return err
+			}
+			if err := a.reg.Add(d, subdir); err != nil {
+				return err
+			}
+		}
+		return a.restart(targetDir(rest))
 	case "list":
 		return a.list()
 	case "logs":
@@ -133,7 +148,7 @@ func targetDir(args []string) string {
 func (a *app) discoverAll() (map[string][]*site.Site, error) {
 	projects := map[string][]*site.Site{}
 	for _, dir := range a.reg.Sorted() {
-		sites, err := site.Discover(dir)
+		sites, err := site.DiscoverWithDocroot(dir, a.reg.DocRoot(dir))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skipping unreadable project %s: %v\n", dir, err)
 			continue
@@ -218,8 +233,8 @@ func portAnswers(port int) bool {
 	return false
 }
 
-func (a *app) up(dir string) error {
-	if _, err := site.Discover(dir); err != nil {
+func (a *app) up(dir, subdir string) error {
+	if _, err := site.DiscoverWithDocroot(dir, subdir); err != nil {
 		return err
 	}
 	if err := a.db.EnsureInstalled(); err != nil {
@@ -231,7 +246,7 @@ func (a *app) up(dir string) error {
 	if err := a.db.EnsureDatabase(projectDB(dir)); err != nil {
 		return err
 	}
-	if err := a.reg.Add(dir); err != nil {
+	if err := a.reg.Add(dir, subdir); err != nil {
 		return err
 	}
 	if err := a.reload(); err != nil {
@@ -246,6 +261,9 @@ func (a *app) up(dir string) error {
 	projects, _ := a.discoverAll()
 	for _, s := range projects[dir] {
 		fmt.Printf("  %s\n", siteURL(s.Host()))
+		if subdir != "" {
+			fmt.Printf("  (docroot: %s)\n", s.DocRoot)
+		}
 	}
 	return nil
 }
@@ -310,7 +328,7 @@ func (a *app) list() error {
 func (a *app) listItems() ([]tui.ProjectItem, error) {
 	var items []tui.ProjectItem
 	for _, dir := range a.reg.Sorted() {
-		sites, err := site.Discover(dir)
+		sites, err := site.DiscoverWithDocroot(dir, a.reg.DocRoot(dir))
 		if err != nil {
 			items = append(items, tui.ProjectItem{Dir: dir, Sites: []string{"(unreadable: " + err.Error() + ")"}})
 			continue
@@ -519,6 +537,20 @@ func siteURL(host string) string {
 		return fmt.Sprintf("https://%s:%d", host, port)
 	}
 	return "https://" + host
+}
+
+// dirFlag extracts --dir <subdir> from args, returning the subdir and
+// the remaining positional args.
+func dirFlag(args []string) (subdir string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--dir" && i+1 < len(args) {
+			subdir = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	return subdir, rest
 }
 
 func portEnvInt(name string, fallback int) int {

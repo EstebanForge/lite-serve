@@ -21,7 +21,12 @@ lserve up
 # open https://demo.localhost:8443
 ```
 
-That is the whole model. Every folder in `./sites` becomes a hostname. WordPress is detected automatically and gets `WP_HOME`/`WP_SITEURL` injected, so no redirect loops.
+That is the whole model. Two ways to serve:
+
+- `./sites/<name>` inside a project: every folder becomes `<name>.localhost`. Several sites per project.
+- Any other directory: the directory itself is served as `<dirname>.localhost`. One site, no setup. `lserve up --dir wp` serves a subfolder (`wp/`) as the docroot instead; `lserve restart --dir wp` changes it later.
+
+WordPress is detected automatically and gets `WP_HOME`/`WP_SITEURL` injected, so no redirect loops.
 
 ## Commands
 

@@ -105,11 +105,38 @@ func TestDiscoverRejectsBadNames(t *testing.T) {
 }
 
 func TestDiscoverErrors(t *testing.T) {
-	if _, err := Discover(t.TempDir()); err == nil {
-		t.Error("missing sites dir: want error")
-	}
 	root := mk(t, "sites/empty")
 	if _, err := Discover(root); err == nil {
 		t.Error("empty sites dir: want error")
+	}
+}
+
+func TestDiscoverSelf(t *testing.T) {
+	root := t.TempDir()
+	// the temp dir basename is not a valid host label (digits), so use a
+	// named subdir like a real project folder
+	proj := filepath.Join(root, "testme")
+	if err := os.MkdirAll(filepath.Join(proj, "public"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sites, err := Discover(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sites) != 1 || sites[0].Name != "testme" || sites[0].Host() != "testme.localhost" {
+		t.Fatalf("want single site testme.localhost, got %+v", sites)
+	}
+	if sites[0].DocRoot != filepath.Join(proj, "public") {
+		t.Errorf("docroot: want public/, got %s", sites[0].DocRoot)
+	}
+}
+
+func TestDiscoverSelfRejectsBadNames(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bad name"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Discover(filepath.Join(root, "bad name")); err == nil {
+		t.Error("invalid basename: want error")
 	}
 }

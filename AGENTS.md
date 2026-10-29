@@ -35,7 +35,7 @@ curl -sk https://demo.localhost:8443/
 ## Architecture
 
 - `cmd/lserve/main.go` — all CLI wiring (`up/down/restart/list/logs/mailpit/db`). The `app` struct owns home dir, registry, binary path, and DB handle. `reload()` renders the shared Caddyfile and reloads or starts the daemon.
-- `internal/site` — discovery: folder `sites/<name>` becomes `<name>.localhost`; docroot = first of `public/`, `web/`, root with `index.php`/`wp-load.php`; WordPress detected by `wp-load.php`. Pure functions, heavily tested.
+- `internal/site` — discovery: with `./sites`, each child becomes `<name>.localhost`; without it the cwd itself becomes one site named by its basename (refuses $HOME and /). Docroot = first of `public/`, `web/`, root with `index.php`/`wp-load.php`; WordPress detected by `wp-load.php`. Pure functions, heavily tested.
 - `internal/caddy` — renders ONE Caddyfile for all registered projects (sorted output; case-insensitive hostname collision detection).
 - `internal/registry` — JSON registry of served projects at `~/.local/state/lite-serve/registry.json`; flock-guarded read-modify-write.
 - `internal/bin` — pinned binary downloads (frankenPHP v1.13.4, Mailpit v1.32.0) with sha256 verification; system `tar` does the extraction.

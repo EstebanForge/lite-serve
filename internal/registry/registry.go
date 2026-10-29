@@ -20,6 +20,9 @@ var ErrNotRegistered = errors.New("not registered")
 type Project struct {
 	Dir     string    `json:"dir"`
 	AddedAt time.Time `json:"added_at"`
+	// DocRoot overrides the served docroot relative to Dir (the --dir
+	// flag); empty means resolve by convention.
+	DocRoot string `json:"docroot,omitempty"`
 }
 
 type Registry struct {
@@ -51,17 +54,31 @@ func (r *Registry) Has(dir string) bool {
 // running lserve at once would otherwise lose each other's entry to a
 // last-write-wins race, so the lock is held across re-read + mutate +
 // save; the in-memory copy from Open is refreshed under the lock.
-func (r *Registry) Add(dir string) error {
+func (r *Registry) Add(dir, docroot string) error {
 	return r.locked(func() error {
 		if err := r.reread(); err != nil {
 			return err
 		}
-		if _, err := r.find(dir); err == nil {
+		if i, err := r.find(dir); err == nil {
+			if r.Projects[i].DocRoot != docroot {
+				r.Projects[i].DocRoot = docroot
+				return r.save()
+			}
 			return nil
 		}
-		r.Projects = append(r.Projects, Project{Dir: dir, AddedAt: time.Now()})
+		r.Projects = append(r.Projects, Project{Dir: dir, AddedAt: time.Now(), DocRoot: docroot})
 		return r.save()
 	})
+}
+
+// DocRoot returns the stored docroot override for dir, "" if none or
+// unregistered.
+func (r *Registry) DocRoot(dir string) string {
+	i, err := r.find(dir)
+	if err != nil {
+		return ""
+	}
+	return r.Projects[i].DocRoot
 }
 
 func (r *Registry) Remove(dir string) error {

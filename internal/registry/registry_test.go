@@ -11,13 +11,13 @@ func TestAddRemoveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Add("/p1"); err != nil {
+	if err := r.Add("/p1", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Add("/p2"); err != nil {
+	if err := r.Add("/p2", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Add("/p1"); err != nil { // duplicate is a no-op
+	if err := r.Add("/p1", ""); err != nil { // duplicate is a no-op
 		t.Fatal(err)
 	}
 	fresh, err := Open(dir)
@@ -58,7 +58,7 @@ func TestConcurrentAddsLoseNothing(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			if err := r.Add("/proj-" + string(rune('a'+i))); err != nil {
+			if err := r.Add("/proj-"+string(rune('a'+i)), ""); err != nil {
 				t.Error(err)
 			}
 		}()
