@@ -1,0 +1,17 @@
+# Changelog
+
+## 0.1.0 - 2026-10-29
+
+First release. Valet-style PHP development without Docker.
+
+- `lserve up` serves every folder in `./sites` as `https://<name>.localhost:8443` from a shared background frankenphp daemon; the terminal stays free
+- Multiple projects at once on one daemon; site name collisions across projects are refused with a named error
+- WordPress detected automatically; `WP_HOME`/`WP_SITEURL` injected so canonical redirects do not loop
+- Per-user pinned MySQL 8.4, one database per project, `lserve db client|import|dump|dsn`
+- `lserve mailpit` runs a pinned Mailpit for local email capture (UI 127.0.0.1:8025, SMTP 127.0.0.1:1025)
+- Interactive TUI pickers on a TTY (`lserve list`, `lserve mailpit`), plain tables when piped
+- Rootless defaults: HTTP 8080, HTTPS 8443, all loopback; 80/443 via env plus setcap
+- Graceful `frankenphp reload` on config changes; registry locked against concurrent edits
+- Port conflicts reported as port conflicts, with the fix spelled out
+- Platforms: linux-amd64, darwin-arm64 (Windows via WSL)
+- `curl | bash` installer into `~/.local/bin`, re-runnable for updates
