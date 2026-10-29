@@ -1,3 +1,6 @@
 /lserve
+/dist/
 *.tmp
 /devenv
+.DS_Store
+coverage.out
