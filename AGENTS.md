@@ -15,6 +15,20 @@ Operating guide for coding agents working in this repo.
 
 All verified; there is no lint or CI config in the repo.
 
+### Quick Commands (`just` recipes)
+
+```bash
+just            # List all available targets
+just build      # Build binary to bin/lserve
+just fmt        # Format Go source code
+just vet        # Run go vet
+just test       # Run unit tests (-short)
+just check      # Run static checks and unit tests
+just ci         # Validate and build locally
+```
+
+Or via direct Go commands:
+
 ```bash
 go build -o lserve ./cmd/lserve   # build
 go vet ./...                      # static check (the only lint gate)
