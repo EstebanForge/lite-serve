@@ -1,9 +1,10 @@
 // Package home resolves the per-user state directory for lite-devenv.
 // Layout under ~/.local/state/lite-devenv:
 //
-//	bin/        pinned frankenphp and mariadb binaries
-//	run/        pidfiles, caddyfile, mariadb socket and datadir
-//	log/        frankenphp.log, mariadb.log
+//	bin/         pinned frankenphp, mailpit and mysql binaries
+//	run/         pidfiles, caddyfile, mysql socket
+//	log/         frankenphp.log, mysqld.log, mailpit.log
+//	registry.json  projects currently served by the shared daemon
 package home
 
 import (
@@ -32,6 +33,14 @@ func (h Home) Run() string  { return filepath.Join(h.root, "run") }
 func (h Home) Log() string  { return filepath.Join(h.root, "log") }
 func (h Home) FrankenPHP() string {
 	return filepath.Join(h.Bin(), "frankenphp")
+}
+
+func (h Home) FrankenPHPpid() string {
+	return filepath.Join(h.Run(), "frankenphp.pid")
+}
+
+func (h Home) Caddyfile() string {
+	return filepath.Join(h.Run(), "Caddyfile")
 }
 
 func (h Home) MkdirAll() error {

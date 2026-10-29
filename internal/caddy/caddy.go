@@ -1,68 +1,92 @@
-// Package caddy renders the frankenphp (Caddy) config: one site block
-// per parked site, loopback bind, internal CA TLS. WordPress sites get
-// WP_HOME/WP_SITEURL env inside php_server because Caddy rejects
-// site-level env and WordPress compares the injected URL against
-// HTTP_HOST.
+// Package caddy renders the shared frankenphp Caddyfile: every site of
+// every registered project becomes an https://<name>.localhost block.
+// One daemon serves all projects on one port, valet-style.
 package caddy
 
 import (
 	"bytes"
 	"fmt"
-	"sort"
+	"strconv"
+	"strings"
 	"text/template"
 
 	"github.com/EstebanForge/lite-devenv/internal/site"
 )
 
-var tmpl = template.Must(template.New("caddyfile").Funcs(template.FuncMap{
-	"siteURL": siteURL,
-}).Parse(`{
-	admin off
+const caddyfileTemplate = `
+{
 	http_port {{.HTTPPort}}
 	https_port {{.HTTPSPort}}
+	auto_https disable_redirects
 }
-{{range .Sites}}
+
+{{range .Sites -}}
 https://{{.Host}}:{{$.HTTPSPort}} {
 	bind 127.0.0.1 ::1
 	tls internal
 	root * "{{.DocRoot}}"
-	{{if .WordPress}}php_server {
-		env WP_HOME {{siteURL .Host $.HTTPSPort}}
-		env WP_SITEURL {{siteURL .Host $.HTTPSPort}}
+	encode zstd gzip
+{{if .WordPress -}}
+	# WP_HOME/WP_SITEURL injected inside php_server: frankenphp worker
+	# mode does not reliably inherit parent env.
+	php_server {
+		env WP_HOME {{siteURL $.HTTPSPort .Host}}
+		env WP_SITEURL {{siteURL $.HTTPSPort .Host}}
 	}
-	{{else}}php_server
-	{{end}}
+{{else -}}
+	php_server
+{{end -}}
 }
-{{end}}`))
+{{end}}
+`
 
-func siteURL(host string, httpsPort int) string {
+type templateData struct {
+	Sites     []*site.Site
+	HTTPPort  int
+	HTTPSPort int
+}
+
+var tmpl = template.Must(template.New("caddyfile").Funcs(template.FuncMap{
+	"siteURL": siteURL,
+}).Parse(caddyfileTemplate))
+
+// siteURL builds the public site URL, omitting the port when it is the
+// https default: WP_HOME with an explicit :443 makes WordPress
+// redirect_canonical loop.
+func siteURL(httpsPort int, host string) string {
 	if httpsPort == 443 {
 		return "https://" + host
 	}
-	return fmt.Sprintf("https://%s:%d", host, httpsPort)
+	return "https://" + host + ":" + strconv.Itoa(httpsPort)
 }
 
-// Render returns the Caddyfile body for the sites. Empty site list is
-// an error: an empty config would make frankenphp exit immediately.
-func Render(sites []*site.Site, httpPort, httpsPort int) (string, error) {
-	if len(sites) == 0 {
-		return "", fmt.Errorf("no sites to render")
+// Render builds the Caddyfile for all projects' sites. Hostnames must
+// be unique across projects: Caddy refuses duplicate site addresses, so
+// the collision is reported here with both project paths.
+func Render(projects map[string][]*site.Site, httpPort, httpsPort int) (string, error) {
+	if len(projects) == 0 {
+		return "", fmt.Errorf("no projects registered")
 	}
-	if httpPort <= 0 || httpsPort <= 0 {
-		return "", fmt.Errorf("ports must be positive: http=%d https=%d", httpPort, httpsPort)
+	if httpPort <= 0 || httpPort > 65535 || httpsPort <= 0 || httpsPort > 65535 {
+		return "", fmt.Errorf("invalid ports: http=%d https=%d", httpPort, httpsPort)
 	}
-	ordered := make([]*site.Site, len(sites))
-	copy(ordered, sites)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
-
+	owners := map[string]string{}
+	data := templateData{HTTPPort: httpPort, HTTPSPort: httpsPort}
+	for dir, sites := range projects {
+		for _, s := range sites {
+			if owner, taken := owners[s.Host()]; taken {
+				return "", fmt.Errorf("site name collision: %q is served by both %s and %s; rename one folder", s.Host(), owner, dir)
+			}
+			owners[s.Host()] = dir
+			data.Sites = append(data.Sites, s)
+		}
+	}
+	if len(data.Sites) == 0 {
+		return "", fmt.Errorf("no sites across registered projects")
+	}
 	var buf bytes.Buffer
-	data := struct {
-		Sites     []*site.Site
-		HTTPPort  int
-		HTTPSPort int
-	}{ordered, httpPort, httpsPort}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	return strings.TrimLeft(buf.String(), "\n"), nil
 }

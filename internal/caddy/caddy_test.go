@@ -8,8 +8,10 @@ import (
 )
 
 func TestRenderBasicShape(t *testing.T) {
-	sites := []*site.Site{{Name: "demo", DocRoot: "/srv/demo/public"}}
-	out, err := Render(sites, 80, 8443)
+	projects := map[string][]*site.Site{
+		"/srv/demo": {{Name: "demo", DocRoot: "/srv/demo/public"}},
+	}
+	out, err := Render(projects, 80, 8443)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,18 +21,14 @@ func TestRenderBasicShape(t *testing.T) {
 		"bind 127.0.0.1 ::1",
 		"tls internal",
 		`root * "/srv/demo/public"`,
-		"php_server\n",                 // non-WP: bare directive, no env block
-		"https://demo.localhost:443\"", // must not appear: port is 8443
+		"php_server\n", // non-WP: bare directive, no env block
 	} {
-		if want == "https://demo.localhost:443\"" {
-			if strings.Contains(out, want) {
-				t.Errorf("unexpected default port in:\n%s", out)
-			}
-			continue
-		}
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "https://demo.localhost:443\"") {
+		t.Errorf("unexpected default port in:\n%s", out)
 	}
 	if strings.Contains(out, "WP_HOME") {
 		t.Errorf("non-WP site got WP env:\n%s", out)
@@ -38,8 +36,10 @@ func TestRenderBasicShape(t *testing.T) {
 }
 
 func TestRenderWordPressEnv(t *testing.T) {
-	sites := []*site.Site{{Name: "blog", DocRoot: "/srv/blog", WordPress: true}}
-	out, err := Render(sites, 80, 443)
+	projects := map[string][]*site.Site{
+		"/srv/blog": {{Name: "blog", DocRoot: "/srv/blog", WordPress: true}},
+	}
+	out, err := Render(projects, 80, 443)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,11 +53,21 @@ func TestRenderWordPressEnv(t *testing.T) {
 	}
 }
 
+func TestRenderCollision(t *testing.T) {
+	projects := map[string][]*site.Site{
+		"/a": {{Name: "demo", DocRoot: "/a/public"}},
+		"/b": {{Name: "demo", DocRoot: "/b/public"}},
+	}
+	if _, err := Render(projects, 80, 443); err == nil || !strings.Contains(err.Error(), "collision") {
+		t.Errorf("want collision error, got %v", err)
+	}
+}
+
 func TestRenderErrors(t *testing.T) {
 	if _, err := Render(nil, 80, 443); err == nil {
-		t.Error("no sites: want error")
+		t.Error("no projects: want error")
 	}
-	if _, err := Render([]*site.Site{{Name: "a"}}, 0, 443); err == nil {
+	if _, err := Render(map[string][]*site.Site{"/a": nil}, 0, 443); err == nil {
 		t.Error("bad port: want error")
 	}
 }
