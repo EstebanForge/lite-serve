@@ -7,6 +7,7 @@ package bin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,6 +126,66 @@ func IsVerified(dest, wantSHA string) bool { return isVerified(dest, wantSHA) }
 // DownloadVerified exposes verified download for other packages (mariadb, mysql).
 func DownloadVerified(dest, url, wantSHA string) error {
 	return downloadVerified(dest, url, wantSHA)
+}
+
+// DownloadBottle fetches a Homebrew bottle blob from ghcr.io. The
+// registry answers anonymous pulls only after a token scoped to the
+// formula, so the token dance happens here.
+func DownloadBottle(dest, url, wantSHA, formula string) error {
+	tokReq, err := http.NewRequest("GET",
+		"https://ghcr.io/token?scope=repository:homebrew/core/"+formula+":pull", nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(tokReq)
+	if err != nil {
+		return err
+	}
+	var tok struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
+		resp.Body.Close()
+		return err
+	}
+	resp.Body.Close()
+
+	// The blob URL needs the token as a header; downloadVerified takes
+	// none, so stream here with the same tmp+sha discipline.
+	tmp := fmt.Sprintf("%s.%d.tmp", dest, os.Getpid())
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		out.Close()
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.Token)
+	blob, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	if err != nil {
+		out.Close()
+		return err
+	}
+	defer blob.Body.Close()
+	if blob.StatusCode != http.StatusOK {
+		out.Close()
+		return fmt.Errorf("download %s: HTTP %d", url, blob.StatusCode)
+	}
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(out, h), blob.Body); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA {
+		return fmt.Errorf("sha256 mismatch: got %s, want %s", got, wantSHA)
+	}
+	return os.Rename(tmp, dest)
 }
 
 // isVerified reports whether dest exists and matches wantSHA.

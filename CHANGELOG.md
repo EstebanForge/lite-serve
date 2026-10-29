@@ -4,6 +4,7 @@
 
 - `lserve up` in any directory without a `./sites` folder now serves the directory itself as `<dirname>.localhost`; no project layout required
 - `lserve up --dir <sub>` serves a subfolder as the docroot (`lserve restart --dir <sub>` changes it later)
+- macOS: no longer needs a system MySQL or MariaDB. The server (MariaDB 13.0 via pinned Homebrew bottles, dependencies included) downloads automatically on first run, same as Linux
 
 ## 0.1.0 - 2026-10-29
 

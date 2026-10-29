@@ -1,7 +1,8 @@
 // Package db runs a per-user MySQL 8.4 from a pinned tarball (Linux)
-// or a system mysqld from PATH (macOS, where upstream ships no tarball).
-// The datadir lives in the state dir and is shared across projects;
-// each project gets one database named after its directory.
+// or a system mysqld from PATH (macOS, where upstream ships no tarball;
+// MariaDB works too, with flavor-specific init flags). The datadir
+// lives in the state dir and is shared across projects; each project
+// gets one database named after its directory.
 // Dev-only by design: loopback bind, root with empty password.
 package db
 
@@ -19,12 +20,37 @@ import (
 	"github.com/EstebanForge/lite-serve/internal/bin"
 )
 
-const (
-	mysqlVersion = "8.4.5"
-	assetSHA256  = "517ca6b9332cc8820c871834fa63e94ee9351ee39993960c04230ce9d194d8d3"
-	assetURL     = "https://dev.mysql.com/get/Downloads/MySQL-8.4/" +
-		"mysql-8.4.5-linux-glibc2.28-x86_64-minimal.tar.xz"
+const mysqlVersion = "8.4.5"
+
+// Embedded server per platform; the host mysqld is never used.
+var (
+	linuxMySQL = asset{
+		url: "https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.5-linux-glibc2.28-x86_64-minimal.tar.xz",
+		sha: "517ca6b9332cc8820c871834fa63e94ee9351ee39993960c04230ce9d194d8d3",
+	}
+	// macOS: Homebrew bottles (mariadb links brew openssl@4 and pcre2,
+	// so those ship too; DYLD_LIBRARY_PATH wires them at runtime). The
+	// blob sha256 pins the bytes, the formula/version the contents.
+	darwinBottles = []bottle{
+		{"mariadb", "mariadb", "https://ghcr.io/v2/homebrew/core/mariadb/blobs/sha256:600e667288555d494f99a1cf3f916bfbaf953b8dfe48a6650011bd5c574a9e94",
+			"600e667288555d494f99a1cf3f916bfbaf953b8dfe48a6650011bd5c574a9e94"},
+		{"openssl/4", "openssl4", "https://ghcr.io/v2/homebrew/core/openssl/4/blobs/sha256:6fcbad388ef13f6f9481e91676e2ec1b49f0a3dbd473e838297a3c8850283978",
+			"6fcbad388ef13f6f9481e91676e2ec1b49f0a3dbd473e838297a3c8850283978"},
+		{"pcre2", "pcre2", "https://ghcr.io/v2/homebrew/core/pcre2/blobs/sha256:0ec47d18c50f5770db2b3f07b5b85644284cc6ee8e07e23b11d2727e95932b77",
+			"0ec47d18c50f5770db2b3f07b5b85644284cc6ee8e07e23b11d2727e95932b77"},
+	}
 )
+
+type asset struct{ url, sha string }
+
+// bottle is a pinned Homebrew bottle: formula is the ghcr token scope
+// ("openssl/4" for openssl@4), name the local deps dir.
+type bottle struct {
+	formula string
+	name    string
+	url     string
+	sha     string
+}
 
 type DB struct {
 	Base   string // dir holding bin/mysqld
@@ -32,6 +58,7 @@ type DB struct {
 	Data   string // datadir
 	LogDir string
 	Port   int
+	flavor string // "mysql" or "mariadb", detected from mysqld --version
 }
 
 func New(homeRoot, runDir, logDir string, port int) DB {
@@ -70,32 +97,120 @@ func (d DB) pidfile() string {
 	return filepath.Join(d.Run, "mysqld.pid")
 }
 
-// EnsureInstalled makes the mysqld binary available: pinned tarball on
-// Linux amd64, system PATH lookup elsewhere (macOS: brew install mysql).
+// EnsureInstalled makes the embedded mysqld available, downloading it
+// on first run: pinned MySQL tarball on linux-amd64, pinned MariaDB
+// brew bottles on darwin-arm64. Anything else fails visibly.
 func (d *DB) EnsureInstalled() error {
 	if _, err := os.Stat(d.mysqld()); err == nil {
 		return nil
 	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		if _, err := exec.LookPath("mysqld"); err == nil {
-			d.Base = "" // system install: binaries resolved from PATH
-			return nil
-		}
-		return fmt.Errorf("no mysqld found. Linux amd64 gets an automatic pinned MySQL %s; on %s install one: brew install mysql", mysqlVersion, runtime.GOOS)
-	}
-
 	if err := os.MkdirAll(d.Base, 0o755); err != nil {
 		return err
 	}
+	switch runtime.GOOS + "-" + runtime.GOARCH {
+	case "linux-amd64":
+		return d.installLinux()
+	case "darwin-arm64":
+		return d.installDarwin()
+	}
+	return fmt.Errorf("no embedded database server for %s-%s (supported: linux-amd64, darwin-arm64)", runtime.GOOS, runtime.GOARCH)
+}
+
+func (d *DB) installLinux() error {
 	archive := filepath.Join(d.Base, "dist.tar.xz")
-	if err := bin.DownloadVerified(archive, assetURL, assetSHA256); err != nil {
+	if err := bin.DownloadVerified(archive, linuxMySQL.url, linuxMySQL.sha); err != nil {
 		return err
 	}
-	// stdlib has no xz; system tar handles it on both Linux and macOS.
+	// stdlib has no xz; system tar handles it.
 	if out, err := exec.Command("tar", "xJf", archive, "-C", d.Base, "--strip-components=1").CombinedOutput(); err != nil {
 		return fmt.Errorf("extract mysql: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return os.Remove(archive)
+}
+
+func (d *DB) installDarwin() error {
+	// Bottles unpack to <formula>/<version>/*; strip two components so
+	// mariadb lands in Base and its library deps in Base/deps/<name>.
+	for _, b := range darwinBottles {
+		archive := filepath.Join(d.Base, "bottle-"+b.name+".tar.gz")
+		if err := bin.DownloadBottle(archive, b.url, b.sha, b.formula); err != nil {
+			return err
+		}
+		target := d.Base
+		if b.name != "mariadb" {
+			target = filepath.Join(d.Base, "deps", b.name)
+		}
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			return err
+		}
+		if out, err := exec.Command("tar", "xzf", archive, "-C", target, "--strip-components=2").CombinedOutput(); err != nil {
+			return fmt.Errorf("extract %s bottle: %v: %s", b.formula, err, strings.TrimSpace(string(out)))
+		}
+		_ = os.Remove(archive)
+	}
+	return nil
+}
+
+// env returns the environment for running server and client binaries.
+// Brew bottles reference their dependency dylibs by Homebrew paths that
+// do not exist here; DYLD_LIBRARY_PATH resolves them from the deps we
+// shipped, by basename, with no binary patching.
+func (d DB) env() []string {
+	if d.Base == "" {
+		return nil
+	}
+	return append(os.Environ(), "DYLD_LIBRARY_PATH="+strings.Join([]string{
+		filepath.Join(d.Base, "deps", "openssl4", "lib"),
+		filepath.Join(d.Base, "deps", "pcre2", "lib"),
+	}, ":"))
+}
+
+// detectFlavor distinguishes MySQL from MariaDB: they share the client
+// protocol but not the datadir bootstrap or some server flags.
+func (d *DB) detectFlavor() error {
+	if d.flavor != "" {
+		return nil
+	}
+	out, err := exec.Command(d.mysqld(), "--version").Output()
+	if err != nil {
+		return fmt.Errorf("mysqld --version: %w", err)
+	}
+	d.flavor = "mysql"
+	if strings.Contains(strings.ToLower(string(out)), "mariadb") {
+		d.flavor = "mariadb"
+	}
+	return nil
+}
+
+// initData creates a fresh datadir with empty root password. MySQL
+// bootstraps in-process; MariaDB needs its install-db helper, and
+// root must use password auth (not unix_socket) for TCP clients.
+func (d *DB) initData() error {
+	if err := os.MkdirAll(d.Data, 0o755); err != nil {
+		return err
+	}
+	if d.flavor == "mariadb" {
+		tool := "mariadb-install-db"
+		if d.Base != "" {
+			tool = filepath.Join(d.Base, "bin", "mariadb-install-db")
+		} else if p, err := exec.LookPath("mysql_install_db"); err == nil {
+			tool = p
+		}
+		cmd := exec.Command(tool, "--datadir="+d.Data,
+			"--auth-root-authentication-method=normal")
+		cmd.Env = d.env()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("mariadb-install-db: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	out, err := exec.Command(d.mysqld(), "--initialize-insecure",
+		"--datadir="+d.Data, "--log-error-verbosity=1").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mysqld --initialize-insecure: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Start ensures the datadir is initialized and mysqld is live.
@@ -103,14 +218,12 @@ func (d *DB) Start() error {
 	if err := os.MkdirAll(d.Run, 0o755); err != nil {
 		return err
 	}
+	if err := d.detectFlavor(); err != nil {
+		return err
+	}
 	if _, err := os.Stat(filepath.Join(d.Data, "mysql")); err != nil {
-		if err := os.MkdirAll(d.Data, 0o755); err != nil {
+		if err := d.initData(); err != nil {
 			return err
-		}
-		out, err := exec.Command(d.mysqld(), "--initialize-insecure",
-			"--datadir="+d.Data, "--log-error-verbosity=1").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("mysqld --initialize-insecure: %v: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 	if d.live() {
@@ -121,15 +234,27 @@ func (d *DB) Start() error {
 		return err
 	}
 	defer logf.Close()
-	cmd := exec.Command(d.mysqld(),
-		"--datadir="+d.Data,
+	args := []string{
+		"--datadir=" + d.Data,
 		"--bind-address=127.0.0.1",
-		"--port="+strconv.Itoa(d.Port),
-		"--socket="+d.socket(),
-		"--pid-file="+d.pidfile(),
-		"--mysqlx=OFF",
-		"--log_error="+filepath.Join(d.LogDir, "mysqld-error.log"),
-	)
+		"--port=" + strconv.Itoa(d.Port),
+		"--socket=" + d.socket(),
+		"--pid-file=" + d.pidfile(),
+		"--log_error=" + filepath.Join(d.LogDir, "mysqld-error.log"),
+	}
+	if d.flavor != "mariadb" {
+		// MariaDB aborts on this MySQL-only X-plugin flag
+		args = append(args, "--mysqlx=OFF")
+	} else if d.Base != "" {
+		// The bottle has the Cellar path compiled in, which does not
+		// exist here; point at the messages we actually shipped.
+		args = append(args, "--lc-messages-dir="+filepath.Join(d.Base, "share", "mysql"))
+	}
+	if pluginDir := filepath.Join(d.Base, "lib", "plugin"); d.Base != "" && dirExists(pluginDir) {
+		args = append(args, "--plugin-dir="+pluginDir)
+	}
+	cmd := exec.Command(d.mysqld(), args...)
+	cmd.Env = d.env()
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -206,6 +331,7 @@ func (d *DB) Exec(database string, args []string) error {
 		"-u", "root", "--protocol=TCP", database,
 	}, args...)
 	cmd := exec.Command(d.mysql(), full...)
+	cmd.Env = d.env()
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -224,6 +350,7 @@ func (d *DB) Import(database, file string) error {
 		"-u", "root", "--protocol=TCP", database,
 	}
 	cmd := exec.Command(d.mysql(), full...)
+	cmd.Env = d.env()
 	cmd.Stdin = f
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -240,6 +367,7 @@ func (d *DB) Dump(database, file string) error {
 	}
 	if file == "-" {
 		cmd := exec.Command(d.dump(), args...)
+		cmd.Env = d.env()
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
@@ -250,6 +378,7 @@ func (d *DB) Dump(database, file string) error {
 		return err
 	}
 	cmd := exec.Command(d.dump(), args...)
+	cmd.Env = d.env()
 	cmd.Stdout = f
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -296,9 +425,15 @@ func (d *DB) ping() bool {
 	if d.Base == "" {
 		admin = "mysqladmin"
 	}
-	err := exec.Command(admin, "-h", "127.0.0.1", "-P", strconv.Itoa(d.Port),
-		"-u", "root", "--protocol=TCP", "ping").Run()
-	return err == nil
+	cmd := exec.Command(admin, "-h", "127.0.0.1", "-P", strconv.Itoa(d.Port),
+		"-u", "root", "--protocol=TCP", "ping")
+	cmd.Env = d.env()
+	return cmd.Run() == nil
+}
+
+func dirExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
 }
 
 func (d *DB) exec(sql string) (string, error) {
@@ -306,7 +441,9 @@ func (d *DB) exec(sql string) (string, error) {
 		"-h", "127.0.0.1", "-P", strconv.Itoa(d.Port),
 		"-u", "root", "--protocol=TCP", "-e", sql,
 	}
-	out, err := exec.Command(d.mysql(), args...).CombinedOutput()
+	cmd := exec.Command(d.mysql(), args...)
+	cmd.Env = d.env()
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 

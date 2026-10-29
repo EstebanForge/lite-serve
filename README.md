@@ -44,7 +44,7 @@ Multiple projects run at once on one shared daemon. `lserve down` on the last on
 ## Under the hood
 
 - Pinned frankenPHP serves all sites. TLS is a local CA, so the browser warns once per site. This is normal.
-- Pinned MySQL 8.4 per user, one database per project, root with no password. Dev only, loopback only.
+- Pinned MySQL 8.4 (Linux) or MariaDB (macOS) per user, downloaded automatically on first run, one database per project, root with no password. Dev only, loopback only. Never touches a database server installed on your system.
 - Pinned Mailpit for email. Start it when you need it.
 - Linux (amd64) and macOS (arm64). Windows runs fine under WSL. Anything else fails loudly on purpose.
 - Everything lives in `~/.local/state/lite-serve/`. Delete it to uninstall completely.
