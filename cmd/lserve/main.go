@@ -173,14 +173,49 @@ func (a *app) reload() error {
 		// other project. Falls back to restart if the reload fails.
 		cmd := exec.Command(a.franken, "reload", "--config", a.h.Caddyfile(), "--adapter", "caddyfile")
 		if _, err := cmd.CombinedOutput(); err == nil {
-			return waitPort(portEnvInt("DEVENV_HTTPS_PORT", 443), 5*time.Second)
+			return a.waitDaemonUp()
 		}
 	}
 	_ = proc.Stop(a.h.FrankenPHPpid(), a.franken)
 	if err := proc.Start(a.franken, []string{"run", "--config", a.h.Caddyfile(), "--adapter", "caddyfile"}, a.h.FrankenPHPpid(), filepath.Join(a.h.Log(), "frankenphp.log")); err != nil {
 		return err
 	}
-	return waitPort(portEnvInt("DEVENV_HTTPS_PORT", 443), 5*time.Second)
+	return a.waitDaemonUp()
+}
+
+// waitDaemonUp requires BOTH our daemon process alive AND its port
+// answering. Port alone is not proof: any squatter (the macOS tunnel,
+// another service) answers too, and a bind failure then looks healthy.
+func (a *app) waitDaemonUp() error {
+	port := portEnvInt("DEVENV_HTTPS_PORT", 443)
+	waitErr := waitPort(port, 5*time.Second)
+	_, pidErr := proc.PID(a.h.FrankenPHPpid(), a.franken)
+	if waitErr == nil && pidErr == nil {
+		// The daemon can still be in its init window, one bind error
+		// away from dying; it must still be alive after a settle.
+		time.Sleep(500 * time.Millisecond)
+		_, pidErr = proc.PID(a.h.FrankenPHPpid(), a.franken)
+		if pidErr == nil {
+			return nil
+		}
+	}
+	log := filepath.Join(a.h.Log(), "frankenphp.log")
+	if pidErr != nil && portAnswers(port) {
+		return fmt.Errorf("port %d is held by another process, so frankenphp failed to bind; free it or set DEVENV_HTTPS_PORT (e.g. 8443). Under 1024 also needs root or setcap cap_net_bind_service=+ep on the frankenphp binary; see %s", port, log)
+	}
+	if pidErr != nil {
+		return fmt.Errorf("daemon failed to start; see %s", log)
+	}
+	return fmt.Errorf("daemon is running but not answering on port %d; see %s", port, log)
+}
+
+func portAnswers(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	return false
 }
 
 func (a *app) up(dir string) error {
