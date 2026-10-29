@@ -156,7 +156,7 @@ func (d *DB) installDarwin() error {
 // do not exist here; DYLD_LIBRARY_PATH resolves them from the deps we
 // shipped, by basename, with no binary patching.
 func (d DB) env() []string {
-	if d.Base == "" {
+	if d.Base == "" || runtime.GOOS != "darwin" {
 		return nil
 	}
 	return append(os.Environ(), "DYLD_LIBRARY_PATH="+strings.Join([]string{
@@ -171,9 +171,11 @@ func (d *DB) detectFlavor() error {
 	if d.flavor != "" {
 		return nil
 	}
-	out, err := exec.Command(d.mysqld(), "--version").Output()
+	cmd := exec.Command(d.mysqld(), "--version")
+	cmd.Env = d.env()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("mysqld --version: %w", err)
+		return fmt.Errorf("mysqld --version: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	d.flavor = "mysql"
 	if strings.Contains(strings.ToLower(string(out)), "mariadb") {
@@ -205,8 +207,10 @@ func (d *DB) initData() error {
 		}
 		return nil
 	}
-	out, err := exec.Command(d.mysqld(), "--initialize-insecure",
-		"--datadir="+d.Data, "--log-error-verbosity=1").CombinedOutput()
+	initCmd := exec.Command(d.mysqld(), "--initialize-insecure",
+		"--datadir="+d.Data, "--log-error-verbosity=1")
+	initCmd.Env = d.env()
+	out, err := initCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("mysqld --initialize-insecure: %v: %s", err, strings.TrimSpace(string(out)))
 	}
