@@ -1,68 +1,63 @@
-# lserve (lite-serve)
+# lite-serve
 
-Valet-style PHP development environment without Docker: any folder with a `./sites` directory is served as `https://<name>.localhost` by a pinned frankenPHP binary, backed by a per-user MySQL 8.4 and an optional embedded Mailpit. One shared daemon serves every registered project, like `valet park` for the whole machine.
+Valet-style PHP development without Docker. One command serves every project on your machine as `https://<folder>.localhost`, with MySQL and Mailpit included. I built it because spinning up containers for a personal WP site is overkill.
 
-## How it works
-
-- `lserve up` in a project registers it. Every folder in `./sites` becomes `https://<name>.localhost`. The daemon detaches: the terminal is never locked.
-- `lserve up` from any other folder adds that project too; all projects share port 443. Two projects with the same site name are refused with a collision error.
-- Docroot resolution per site, first match: `public/`, `web/`, the directory itself (with `wp-load.php` or `index.php`).
-- WordPress sites get `WP_HOME`/`WP_SITEURL` injected inside `php_server`, default port omitted so `redirect_canonical` does not loop.
-- TLS is Caddy's internal CA: self-signed, browser warning on first visit per site.
-- MySQL binds loopback only, root with empty password (dev-only, from `--initialize-insecure`). One database per project, named after the project directory. In `wp-config.php` set `DB_HOST` to `127.0.0.1:3306`, not `localhost` (that would look for the system socket).
-
-## Install and use
+## Install
 
 ```bash
-go build -o lserve ./cmd/lserve   # or: go install ./cmd/lserve
+curl -fsSL https://raw.githubusercontent.com/EstebanForge/lite-serve/main/install.sh | bash
+```
 
+Puts `lserve` in `~/.local/bin`. Run it again any time to update; it overwrites the existing binary. If there is no release yet it builds from source, so you need Go for that path.
+
+## 60 seconds to a running site
+
+```bash
 mkdir -p myproject/sites/demo/public
 echo '<?php phpinfo();' > myproject/sites/demo/public/index.php
 cd myproject
 
-lserve up      # daemon starts in the background, terminal returns
-lserve list    # interactive picker on a TTY, table when piped
-lserve down    # stop serving this directory
+lserve up
+# open https://demo.localhost:8443
 ```
 
-`lserve` alone prints help.
+That is the whole model. Every folder in `./sites` becomes a hostname. WordPress is detected automatically and gets `WP_HOME`/`WP_SITEURL` injected, so no redirect loops.
 
 ## Commands
 
 ```bash
-lserve up [dir]            serve ./sites of a directory (default: cwd)
-lserve down [dir]          remove from the registry, reload the daemon
-lserve restart [dir]       re-discover sites and reload
-lserve list                running projects; enter on one to restart/stop it
-lserve logs [mailpit]      last 50 lines of a log
-lserve mailpit             menu (start/stop/restart/status); or lserve mailpit start|stop|restart|status
-lserve db client           mysql client into the project database
-lserve db import dump.sql
-lserve db dump [file]      default: stdout
-lserve db dsn              mysql://root@127.0.0.1:3306/<project>
+lserve up [dir]     serve this directory's sites (background daemon, terminal stays free)
+lserve down         stop serving it
+lserve list         interactive picker on a TTY, table when piped
+lserve logs         tail the server log
+lserve mailpit      local email capture, UI on 127.0.0.1:8025
+lserve db client    mysql shell into the project database
 ```
 
-When the registry becomes empty, the daemon and MySQL stop.
+Multiple projects run at once on one shared daemon. `lserve down` on the last one stops everything.
 
-## Ports
+## Under the hood
 
-Defaults are rootless: `DEVENV_HTTP_PORT` (8080), `DEVENV_HTTPS_PORT` (8443), `DEVENV_DB_PORT` (3306), `DEVENV_MAILPIT_UI_PORT` (8025), `DEVENV_MAILPIT_SMTP_PORT` (1025). Site URLs always carry the explicit port (e.g. `https://demo.localhost:8443`), which `WP_HOME`/`WP_SITEURL` follow, so canonical redirects stay consistent. To run without the port in the URL, set the env vars to 80/443; ports under 1024 need root or `setcap cap_net_bind_service=+ep` on the frankenPHP binary. If a port is held by another process (the macOS tunnel, another service), `lserve up` fails with a named conflict instead of silently half-serving.
+- Pinned frankenPHP serves all sites. TLS is a local CA, so the browser warns once per site. This is normal.
+- Pinned MySQL 8.4 per user, one database per project, root with no password. Dev only, loopback only.
+- Pinned Mailpit for email. Start it when you need it.
+- Linux (amd64) and macOS (arm64). Windows runs fine under WSL. Anything else fails loudly on purpose.
+- Everything lives in `~/.local/state/lite-serve/`. Delete it to uninstall completely.
+- Defaults are rootless: HTTP 8080, HTTPS 8443. Want `https://demo.localhost` without the port? Set `DEVENV_HTTPS_PORT=443` and give frankenPHP the bind capability:
 
-## State directory
-
-`~/.local/state/lite-serve/` holds pinned binaries (`bin/`), the MySQL datadir (`mysql-data/`, shared across projects), pidfiles and the Caddyfile (`run/`), logs (`log/`), and `registry.json` (served projects). Override with `DEVENV_HOME`.
-
-## OS support
-
-| OS/arch | frankenPHP | Mailpit | MySQL |
-|---|---|---|---|
-| Linux amd64 | pinned v1.13.4, sha256 | pinned v1.32.0, sha256 | pinned tarball 8.4.5 minimal, sha256 |
-| macOS arm64 | pinned v1.13.4, sha256 | pinned v1.32.0, sha256 | system `mysqld` from PATH (`brew install mysql`) |
-
-Windows runs under WSL (linux-amd64). Other platforms fail visibly.
+```bash
+sudo setcap cap_net_bind_service=+ep ~/.local/state/lite-serve/bin/frankenphp
+```
 
 ## Not goals
 
-- Production use. Loopback binds, empty root password, internal CA: all dev-only.
-- PHP version switching (one pinned frankenPHP per release).
-- Graceful Caddy reloads (daemon restarts on config change; dev traffic tolerates the gap).
+Production use, PHP version switching, graceful-everything. This is a dev tool that stays out of your way.
+
+## Develop
+
+```bash
+go build -o lserve ./cmd/lserve
+go test ./...
+```
+
+No Docker. No config files. No daemons named after Greek gods.
