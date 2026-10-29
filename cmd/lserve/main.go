@@ -26,6 +26,9 @@ import (
 	"github.com/EstebanForge/lite-serve/internal/tui"
 )
 
+// Stamped at build time via -ldflags "-X main.buildTime=...".
+var buildTime = "dev"
+
 type app struct {
 	h       home.Home
 	reg     *registry.Registry
@@ -38,6 +41,10 @@ func main() {
 	if len(args) == 0 {
 		usage()
 		os.Exit(2)
+	}
+	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
+		fmt.Printf("lserve 0.1.0 (built %s)\n", buildTime)
+		return
 	}
 	if err := run(args[0], args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

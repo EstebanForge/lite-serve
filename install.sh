@@ -34,9 +34,12 @@ else
     echo "go is required to build from source: https://go.dev/dl/" >&2
     exit 1
   fi
-  GOBIN="$DEST" go install "github.com/$REPO/cmd/lserve@latest"
+  GOBIN="$DEST" go install -ldflags "-X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" "github.com/$REPO/cmd/lserve@latest"
   echo "installed $BIN (built from source)"
 fi
+
+# Prove which build landed: version includes the build timestamp.
+"$BIN" version || true
 
 case ":$PATH:" in
   *":$DEST:"*) ;;

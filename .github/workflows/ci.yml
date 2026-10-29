@@ -41,4 +41,4 @@ jobs:
           cache: true
       # Compile check only; release assets are built by the release workflow
       - name: build
-        run: go build -buildvcs=false -trimpath -o /tmp/lserve ./cmd/lserve
+        run: go build -buildvcs=false -trimpath -ldflags "-X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o /tmp/lserve ./cmd/lserve
