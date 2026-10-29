@@ -1,4 +1,4 @@
-# lserve (lite-devenv)
+# lserve (lite-serve)
 
 Valet-style PHP development environment without Docker: any folder with a `./sites` directory is served as `https://<name>.localhost` by a pinned frankenPHP binary, backed by a per-user MySQL 8.4 and an optional embedded Mailpit. One shared daemon serves every registered project, like `valet park` for the whole machine.
 
@@ -46,11 +46,11 @@ When the registry becomes empty, the daemon and MySQL stop.
 
 ## Ports
 
-`DEVENV_HTTP_PORT` (80), `DEVENV_HTTPS_PORT` (443), `DEVENV_DB_PORT` (3306), `DEVENV_MAILPIT_UI_PORT` (8025), `DEVENV_MAILPIT_SMTP_PORT` (1025). Ports under 1024 need root or `setcap cap_net_bind_service=+ep` on the frankenPHP binary; use 8080/8443 otherwise.
+Defaults are rootless: `DEVENV_HTTP_PORT` (8080), `DEVENV_HTTPS_PORT` (8443), `DEVENV_DB_PORT` (3306), `DEVENV_MAILPIT_UI_PORT` (8025), `DEVENV_MAILPIT_SMTP_PORT` (1025). Site URLs always carry the explicit port (e.g. `https://demo.localhost:8443`), which `WP_HOME`/`WP_SITEURL` follow, so canonical redirects stay consistent. To run without the port in the URL, set the env vars to 80/443; ports under 1024 need root or `setcap cap_net_bind_service=+ep` on the frankenPHP binary. If a port is held by another process (the macOS tunnel, another service), `lserve up` fails with a named conflict instead of silently half-serving.
 
 ## State directory
 
-`~/.local/state/lite-devenv/` holds pinned binaries (`bin/`), the MySQL datadir (`mysql-data/`, shared across projects), pidfiles and the Caddyfile (`run/`), logs (`log/`), and `registry.json` (served projects). Override with `DEVENV_HOME`.
+`~/.local/state/lite-serve/` holds pinned binaries (`bin/`), the MySQL datadir (`mysql-data/`, shared across projects), pidfiles and the Caddyfile (`run/`), logs (`log/`), and `registry.json` (served projects). Override with `DEVENV_HOME`.
 
 ## OS support
 

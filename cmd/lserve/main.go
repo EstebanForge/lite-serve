@@ -56,7 +56,7 @@ func usage() {
   mailpit   mailpit menu: start|stop|restart|status (interactive when a TTY)
   db        client|import <dump.sql>|dump [file]|dsn
 
-ports: DEVENV_HTTP_PORT=80 DEVENV_HTTPS_PORT=443 DEVENV_DB_PORT=3306
+ports: DEVENV_HTTP_PORT=8080 DEVENV_HTTPS_PORT=8443 DEVENV_DB_PORT=3306
        DEVENV_MAILPIT_UI_PORT=8025 DEVENV_MAILPIT_SMTP_PORT=1025`)
 }
 
@@ -154,7 +154,7 @@ func (a *app) reload() error {
 	if err != nil {
 		return err
 	}
-	cfg, err := caddy.Render(projects, portEnvInt("DEVENV_HTTP_PORT", 80), portEnvInt("DEVENV_HTTPS_PORT", 443))
+	cfg, err := caddy.Render(projects, portEnvInt("DEVENV_HTTP_PORT", 8080), portEnvInt("DEVENV_HTTPS_PORT", 8443))
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func (a *app) reload() error {
 // answering. Port alone is not proof: any squatter (the macOS tunnel,
 // another service) answers too, and a bind failure then looks healthy.
 func (a *app) waitDaemonUp() error {
-	port := portEnvInt("DEVENV_HTTPS_PORT", 443)
+	port := portEnvInt("DEVENV_HTTPS_PORT", 8443)
 	waitErr := waitPort(port, 5*time.Second)
 	_, pidErr := proc.PID(a.h.FrankenPHPpid(), a.franken)
 	if waitErr == nil && pidErr == nil {
@@ -201,7 +201,7 @@ func (a *app) waitDaemonUp() error {
 	}
 	log := filepath.Join(a.h.Log(), "frankenphp.log")
 	if pidErr != nil && portAnswers(port) {
-		return fmt.Errorf("port %d is held by another process, so frankenphp failed to bind; free it or set DEVENV_HTTPS_PORT (e.g. 8443). Under 1024 also needs root or setcap cap_net_bind_service=+ep on the frankenphp binary; see %s", port, log)
+		return fmt.Errorf("port %d is held by another process, so frankenphp failed to bind; free it or set DEVENV_HTTPS_PORT. Ports under 1024 need root or setcap cap_net_bind_service=+ep on the frankenphp binary; see %s", port, log)
 	}
 	if pidErr != nil {
 		return fmt.Errorf("daemon failed to start; see %s", log)
@@ -245,7 +245,7 @@ func (a *app) up(dir string) error {
 	fmt.Printf("serving %s (db %s):\n", dir, a.db.DSN(projectDB(dir)))
 	projects, _ := a.discoverAll()
 	for _, s := range projects[dir] {
-		fmt.Printf("  https://%s\n", s.Host())
+		fmt.Printf("  %s\n", siteURL(s.Host()))
 	}
 	return nil
 }
@@ -317,7 +317,7 @@ func (a *app) listItems() ([]tui.ProjectItem, error) {
 		}
 		var hosts []string
 		for _, s := range sites {
-			hosts = append(hosts, "https://"+s.Host())
+			hosts = append(hosts, siteURL(s.Host()))
 		}
 		items = append(items, tui.ProjectItem{Dir: dir, Sites: hosts})
 	}
@@ -510,6 +510,15 @@ func waitPort(port int, timeout time.Duration) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// siteURL prints a clickable site address; the port is omitted only
+// for the real 443 default.
+func siteURL(host string) string {
+	if port := portEnvInt("DEVENV_HTTPS_PORT", 8443); port != 443 {
+		return fmt.Sprintf("https://%s:%d", host, port)
+	}
+	return "https://" + host
 }
 
 func portEnvInt(name string, fallback int) int {
