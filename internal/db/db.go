@@ -155,14 +155,18 @@ func (d *DB) installDarwin() error {
 // Brew bottles reference their dependency dylibs by Homebrew paths that
 // do not exist here; DYLD_LIBRARY_PATH resolves them from the deps we
 // shipped, by basename, with no binary patching.
+func (d DB) dyld() string {
+	return strings.Join([]string{
+		filepath.Join(d.Base, "deps", "openssl4", "lib"),
+		filepath.Join(d.Base, "deps", "pcre2", "lib"),
+	}, ":")
+}
+
 func (d DB) env() []string {
 	if d.Base == "" || runtime.GOOS != "darwin" {
 		return nil
 	}
-	return append(os.Environ(), "DYLD_LIBRARY_PATH="+strings.Join([]string{
-		filepath.Join(d.Base, "deps", "openssl4", "lib"),
-		filepath.Join(d.Base, "deps", "pcre2", "lib"),
-	}, ":"))
+	return append(os.Environ(), "DYLD_LIBRARY_PATH="+d.dyld())
 }
 
 // detectFlavor distinguishes MySQL from MariaDB: they share the client
@@ -213,7 +217,7 @@ func (d *DB) initData() error {
 			// the bootstrap mariadbd child inherits it.
 			cmd = exec.Command("/bin/sh", "-c",
 				`export DYLD_LIBRARY_PATH="$1"; shift; exec "$@"`,
-				"sh", os.Getenv("DYLD_LIBRARY_PATH"), tool)
+				"sh", d.dyld(), tool)
 			cmd.Args = append(cmd.Args, args...)
 		} else {
 			cmd = exec.Command(tool, args...)
