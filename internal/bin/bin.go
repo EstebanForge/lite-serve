@@ -93,7 +93,7 @@ func Mailpit(binDir string) (string, error) {
 	}
 	// stdlib has no gzip/tar stream unpack for a single member in one
 	// shot; system tar handles it on both Linux and macOS.
-	stage := archive + "-stage"
+	stage := fmt.Sprintf("%s-%d-stage", archive, os.Getpid())
 	if err := os.MkdirAll(stage, 0o755); err != nil {
 		return "", err
 	}

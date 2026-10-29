@@ -42,9 +42,11 @@ type model struct {
 	projects []list.Item // project rows, restored when esc leaves action mode
 	onAction func(dir, action string) string
 	onStatus func() string
+	status   string // cached status line; View must not shell out per frame
 	mailpit  bool
 	mode     int // 0: pick project (or mailpit action), 1: pick project action
 	result   string
+	err      bool
 	quitting bool
 }
 
@@ -61,16 +63,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		}
-		if m.mode == 1 {
-			if msg.String() == "esc" || msg.String() == "q" {
-				m.mode = 0
-				m.list.Title = "lserve: running projects"
-				m.list.SetItems(m.projects)
-				return m, nil
-			}
-		} else if msg.String() == "q" && !m.mailpit {
+		if msg.String() == "q" {
 			m.quitting = true
 			return m, tea.Quit
+		}
+		if m.mode == 1 && msg.String() == "esc" {
+			m.mode = 0
+			m.list.Title = "lserve: running projects"
+			m.list.SetItems(m.projects)
+			return m, nil
 		}
 		if msg.String() == "enter" {
 			sel, ok := m.list.SelectedItem().(item)
@@ -79,6 +80,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.mailpit || m.mode == 1 {
 				m.result = m.onAction(sel.dir, sel.action)
+				m.err = m.result != "done"
+				if m.onStatus != nil {
+					m.status = m.onStatus()
+				}
+				if sel.action == ActionStop && !m.mailpit {
+					// drop the stopped project so esc does not offer a
+					// dead entry
+					for i, it := range m.projects {
+						if p, ok := it.(item); ok && p.dir == sel.dir {
+							m.projects = append(m.projects[:i], m.projects[i+1:]...)
+							break
+						}
+					}
+					m.mode = 0
+					m.list.Title = "lserve: running projects"
+					m.list.SetItems(m.projects)
+				}
 				return m, nil
 			}
 			// project picked: switch to its action menu
@@ -102,10 +120,14 @@ func (m model) View() string {
 	}
 	s := docStyle.Render(m.list.View())
 	if m.result != "" {
-		s += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(m.result)
+		color := lipgloss.Color("10")
+		if m.err {
+			color = lipgloss.Color("9")
+		}
+		s += "\n" + lipgloss.NewStyle().Foreground(color).Render(m.result)
 	}
-	if m.mailpit && m.onStatus != nil {
-		s += "\n\n" + lipgloss.NewStyle().Faint(true).Render("current: "+m.onStatus())
+	if m.mailpit && m.status != "" {
+		s += "\n\n" + lipgloss.NewStyle().Faint(true).Render("current: "+m.status)
 	}
 	return s + "\n"
 }
@@ -135,7 +157,7 @@ func RunMailpit(status func() string, action func(action string) string) error {
 		item{title: "Status", action: ActionStatus},
 	}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "lserve: mailpit"
-	m := model{list: l, mailpit: true, onStatus: status, onAction: func(_, a string) string { return action(a) }}
+	m := model{list: l, mailpit: true, onStatus: status, status: status(), onAction: func(_, a string) string { return action(a) }}
 	_, err := tea.NewProgram(m).Run()
 	return err
 }

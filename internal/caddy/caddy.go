@@ -6,6 +6,7 @@ package caddy
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -74,13 +75,21 @@ func Render(projects map[string][]*site.Site, httpPort, httpsPort int) (string, 
 	data := templateData{HTTPPort: httpPort, HTTPSPort: httpsPort}
 	for dir, sites := range projects {
 		for _, s := range sites {
-			if owner, taken := owners[s.Host()]; taken {
+			// DNS is case-insensitive: Demo and demo are one hostname
+			// and Caddy would reject the duplicate block.
+			key := strings.ToLower(s.Host())
+			if owner, taken := owners[key]; taken {
 				return "", fmt.Errorf("site name collision: %q is served by both %s and %s; rename one folder", s.Host(), owner, dir)
 			}
-			owners[s.Host()] = dir
+			owners[key] = dir
 			data.Sites = append(data.Sites, s)
 		}
 	}
+	// Map iteration order is random; stable output keeps reload diffs
+	// readable and behavior reproducible.
+	sort.Slice(data.Sites, func(i, j int) bool {
+		return data.Sites[i].Host() < data.Sites[j].Host()
+	})
 	if len(data.Sites) == 0 {
 		return "", fmt.Errorf("no sites across registered projects")
 	}

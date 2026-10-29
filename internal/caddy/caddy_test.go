@@ -63,6 +63,36 @@ func TestRenderCollision(t *testing.T) {
 	}
 }
 
+func TestRenderCollisionCaseInsensitive(t *testing.T) {
+	projects := map[string][]*site.Site{
+		"/a": {{Name: "demo", DocRoot: "/a/public"}},
+		"/b": {{Name: "Demo", DocRoot: "/b/public"}},
+	}
+	if _, err := Render(projects, 80, 443); err == nil || !strings.Contains(err.Error(), "collision") {
+		t.Errorf("case-insensitive collision must be caught, got %v", err)
+	}
+}
+
+func TestRenderDeterministic(t *testing.T) {
+	projects := map[string][]*site.Site{
+		"/a": {{Name: "bbb", DocRoot: "/a/public"}, {Name: "aaa", DocRoot: "/a/web"}},
+		"/b": {{Name: "ccc", DocRoot: "/b"}},
+	}
+	first, err := Render(projects, 80, 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		again, err := Render(projects, 80, 443)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != first {
+			t.Fatalf("render is not deterministic:\n%s\n---\n%s", first, again)
+		}
+	}
+}
+
 func TestRenderErrors(t *testing.T) {
 	if _, err := Render(nil, 80, 443); err == nil {
 		t.Error("no projects: want error")

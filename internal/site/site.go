@@ -26,7 +26,7 @@ func Discover(projectDir string) ([]*Site, error) {
 	sitesDir := filepath.Join(projectDir, "sites")
 	entries, err := os.ReadDir(sitesDir)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read %s: %w (run devenv from the project root)", sitesDir, err)
+		return nil, fmt.Errorf("cannot read %s: %w (run lserve up from the project root)", sitesDir, err)
 	}
 	var sites []*Site
 	for _, e := range entries {

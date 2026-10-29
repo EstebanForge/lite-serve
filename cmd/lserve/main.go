@@ -6,8 +6,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -125,15 +127,16 @@ func targetDir(args []string) string {
 	return mustWd()
 }
 
-// discoverAll maps every registered project to its sites. A project
-// whose sites dir fails discovery breaks the shared Caddyfile, so it
-// fails here, named, instead of serving stale config.
+// discoverAll maps every registered project to its sites. An
+// unreadable project is skipped with a warning, not fatal: one broken
+// folder must not wedge every other project's reload.
 func (a *app) discoverAll() (map[string][]*site.Site, error) {
 	projects := map[string][]*site.Site{}
 	for _, dir := range a.reg.Sorted() {
 		sites, err := site.Discover(dir)
 		if err != nil {
-			return nil, fmt.Errorf("project %s: %w", dir, err)
+			fmt.Fprintf(os.Stderr, "warning: skipping unreadable project %s: %v\n", dir, err)
+			continue
 		}
 		projects[dir] = sites
 	}
@@ -155,11 +158,24 @@ func (a *app) reload() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(a.h.Caddyfile(), []byte(cfg), 0o644); err != nil {
+	// Atomic write: an in-place truncate would leave a 0-byte config if
+	// two reloads race or the write is interrupted.
+	tmp := fmt.Sprintf("%s.%d.tmp", a.h.Caddyfile(), os.Getpid())
+	if err := os.WriteFile(tmp, []byte(cfg), 0o644); err != nil {
 		return err
 	}
-	// Daemon restart, not graceful reload: config changes are rare and
-	// dev traffic tolerates a sub-second gap.
+	if err := os.Rename(tmp, a.h.Caddyfile()); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if _, err := proc.PID(a.h.FrankenPHPpid(), a.franken); err == nil {
+		// Live daemon: graceful reload keeps connections for every
+		// other project. Falls back to restart if the reload fails.
+		cmd := exec.Command(a.franken, "reload", "--config", a.h.Caddyfile(), "--adapter", "caddyfile")
+		if _, err := cmd.CombinedOutput(); err == nil {
+			return waitPort(portEnvInt("DEVENV_HTTPS_PORT", 443), 5*time.Second)
+		}
+	}
 	_ = proc.Stop(a.h.FrankenPHPpid(), a.franken)
 	if err := proc.Start(a.franken, []string{"run", "--config", a.h.Caddyfile(), "--adapter", "caddyfile"}, a.h.FrankenPHPpid(), filepath.Join(a.h.Log(), "frankenphp.log")); err != nil {
 		return err
@@ -184,8 +200,11 @@ func (a *app) up(dir string) error {
 		return err
 	}
 	if err := a.reload(); err != nil {
-		// roll back so a collision or bad render leaves no phantom entry
+		// roll back so a collision or bad render leaves no phantom
+		// entry, then reload again: the other projects must not stay
+		// offline because this one failed.
 		_ = a.reg.Remove(dir)
+		_ = a.reload()
 		return err
 	}
 	fmt.Printf("serving %s (db %s):\n", dir, a.db.DSN(projectDB(dir)))
@@ -275,11 +294,27 @@ func (a *app) logs(args []string) error {
 	if len(args) > 0 && args[0] == "mailpit" {
 		name = "mailpit.log"
 	}
-	data, err := os.ReadFile(filepath.Join(a.h.Log(), name))
+	// Tail the last 64KB instead of loading the whole file: these logs
+	// grow unbounded and reach hundreds of MB.
+	f, err := os.Open(filepath.Join(a.h.Log(), name))
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	const tail = 65536
+	offset := stat.Size() - tail
+	if offset < 0 {
+		offset = 0
+	}
+	buf := make([]byte, stat.Size()-offset)
+	if _, err := f.ReadAt(buf, offset); err != nil && err != io.EOF {
+		return err
+	}
+	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
 	if len(lines) > 50 {
 		lines = lines[len(lines)-50:]
 	}

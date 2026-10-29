@@ -119,7 +119,13 @@ func pidLive(pidPath, bin string) (int, error) {
 	// which this package never reaps after cmd.Start.
 	out, err := exec.Command("ps", "-o", "stat=", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
 	fields := strings.Fields(string(out))
-	if err != nil || len(fields) < 2 || strings.HasPrefix(fields[0], "Z") || !strings.Contains(fields[1], filepath.Base(bin)) {
+	// comm can contain spaces (paths on macOS); join the tail so a
+	// spaced path is not mistaken for a different process.
+	comm := ""
+	if len(fields) >= 2 {
+		comm = strings.Join(fields[1:], " ")
+	}
+	if err != nil || len(fields) < 2 || strings.HasPrefix(fields[0], "Z") || !strings.Contains(comm, filepath.Base(bin)) {
 		_ = os.Remove(pidPath)
 		return 0, ErrNotRunning
 	}

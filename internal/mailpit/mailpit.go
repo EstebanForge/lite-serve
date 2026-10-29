@@ -4,8 +4,10 @@ package mailpit
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/EstebanForge/lite-devenv/internal/bin"
 	"github.com/EstebanForge/lite-devenv/internal/proc"
@@ -30,13 +32,30 @@ func EnsureInstalled(binDir string) (string, error) {
 
 func (m *Mailpit) pidPath() string { return filepath.Join(m.RunDir, "mailpit.pid") }
 
-// Start launches mailpit detached; no-op when already live.
+// Start launches mailpit detached; no-op when already live. The UI
+// port must answer before returning: proc.Start only proves the child
+// forked, and a bind failure would otherwise report success.
 func (m *Mailpit) Start() error {
-	return proc.Start(m.BinPath, []string{
+	if err := proc.Start(m.BinPath, []string{
 		"--listen", "127.0.0.1:" + strconv.Itoa(m.UIPort),
 		"--smtp", "127.0.0.1:" + strconv.Itoa(m.SMTPPort),
 		// auth is off unless configured; loopback bind keeps it local
-	}, m.pidPath(), filepath.Join(m.LogDir, "mailpit.log"))
+	}, m.pidPath(), filepath.Join(m.LogDir, "mailpit.log")); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(m.UIPort))
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("mailpit not accepting connections on %d; see %s", m.UIPort, filepath.Join(m.LogDir, "mailpit.log"))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // Stop signals mailpit if live.
