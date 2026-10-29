@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EstebanForge/lite-devenv/internal/site"
+	"github.com/EstebanForge/lite-serve/internal/site"
 )
 
 func TestRenderBasicShape(t *testing.T) {

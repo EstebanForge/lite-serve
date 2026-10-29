@@ -1,4 +1,4 @@
-module github.com/EstebanForge/lite-devenv
+module github.com/EstebanForge/lite-serve
 
 go 1.27.3
 

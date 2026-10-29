@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/EstebanForge/lite-devenv/internal/bin"
+	"github.com/EstebanForge/lite-serve/internal/bin"
 )
 
 const (

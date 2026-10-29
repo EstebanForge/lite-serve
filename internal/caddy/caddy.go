@@ -11,7 +11,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/EstebanForge/lite-devenv/internal/site"
+	"github.com/EstebanForge/lite-serve/internal/site"
 )
 
 const caddyfileTemplate = `

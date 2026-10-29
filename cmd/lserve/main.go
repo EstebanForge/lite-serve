@@ -1,4 +1,4 @@
-// lserve is the lite-devenv entrypoint: one shared frankenphp daemon
+// lserve is the lite-serve entrypoint: one shared frankenphp daemon
 // serves every registered project's ./sites folders as
 // https://<name>.localhost. Daemons detach, so the terminal is never
 // locked; `lserve list` manages what is running.
@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EstebanForge/lite-devenv/internal/bin"
-	"github.com/EstebanForge/lite-devenv/internal/caddy"
-	"github.com/EstebanForge/lite-devenv/internal/db"
-	"github.com/EstebanForge/lite-devenv/internal/home"
-	"github.com/EstebanForge/lite-devenv/internal/mailpit"
-	"github.com/EstebanForge/lite-devenv/internal/proc"
-	"github.com/EstebanForge/lite-devenv/internal/registry"
-	"github.com/EstebanForge/lite-devenv/internal/site"
-	"github.com/EstebanForge/lite-devenv/internal/tui"
+	"github.com/EstebanForge/lite-serve/internal/bin"
+	"github.com/EstebanForge/lite-serve/internal/caddy"
+	"github.com/EstebanForge/lite-serve/internal/db"
+	"github.com/EstebanForge/lite-serve/internal/home"
+	"github.com/EstebanForge/lite-serve/internal/mailpit"
+	"github.com/EstebanForge/lite-serve/internal/proc"
+	"github.com/EstebanForge/lite-serve/internal/registry"
+	"github.com/EstebanForge/lite-serve/internal/site"
+	"github.com/EstebanForge/lite-serve/internal/tui"
 )
 
 type app struct {

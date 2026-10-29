@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/EstebanForge/lite-devenv/internal/bin"
-	"github.com/EstebanForge/lite-devenv/internal/proc"
+	"github.com/EstebanForge/lite-serve/internal/bin"
+	"github.com/EstebanForge/lite-serve/internal/proc"
 )
 
 type Mailpit struct {
