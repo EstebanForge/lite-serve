@@ -13,25 +13,23 @@ Puts `lserve` in `~/.local/bin`. Run it again any time to update; it overwrites 
 ## 60 seconds to a running site
 
 ```bash
-mkdir -p myproject/sites/demo/public
-echo '<?php phpinfo();' > myproject/sites/demo/public/index.php
-cd myproject
-
+mkdir myproject && cd myproject
+echo '<?php phpinfo();' > index.php
 lserve up
-# open https://demo.localhost:8443
+# open https://myproject.localhost:8443
 ```
 
 That is the whole model. Two ways to serve:
 
+- Any directory: the folder itself becomes `<dirname>.localhost`. One site, no setup. `lserve up --dir wp` serves a subfolder (`wp/`) as the docroot instead; `lserve restart --dir wp` changes it later.
 - `./sites/<name>` inside a project: every folder becomes `<name>.localhost`. Several sites per project.
-- Any other directory: the directory itself is served as `<dirname>.localhost`. One site, no setup. `lserve up --dir wp` serves a subfolder (`wp/`) as the docroot instead; `lserve restart --dir wp` changes it later.
 
 WordPress is detected automatically and gets `WP_HOME`/`WP_SITEURL` injected, so no redirect loops.
 
 ## Commands
 
 ```bash
-lserve up [dir]     serve this directory's sites (background daemon, terminal stays free)
+lserve up [dir]     serve this directory (background daemon, terminal stays free)
 lserve down         stop serving it
 lserve list         interactive picker on a TTY, table when piped
 lserve logs         tail the server log
