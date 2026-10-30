@@ -66,6 +66,7 @@ func usage() {
   logs      tail the frankenphp log (or: logs mailpit)
   mailpit   mailpit menu: start|stop|restart|status (interactive when a TTY)
   db        client|import <dump.sql>|dump [file]|dsn
+  doctor    read-only installation and runtime checks
 
 ports: DEVENV_HTTP_PORT=8080 DEVENV_HTTPS_PORT=8443 DEVENV_DB_PORT=3306
        DEVENV_MAILPIT_UI_PORT=8025 DEVENV_MAILPIT_SMTP_PORT=1025`)
@@ -92,6 +93,9 @@ func newApp() (*app, error) {
 }
 
 func run(cmd string, args []string) error {
+	if cmd == "doctor" {
+		return runDoctor()
+	}
 	a, err := newApp()
 	if err != nil {
 		return err

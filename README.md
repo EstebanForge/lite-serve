@@ -55,6 +55,7 @@ lserve list         interactive picker on a TTY, table when piped
 lserve logs         tail the server log
 lserve mailpit      local email capture, UI on 127.0.0.1:8025
 lserve db client    mysql shell into the project database
+lserve doctor       check installation, ports, session, daemons, and projects
 ```
 
 Multiple projects run at once on one shared daemon. `lserve down` on the last one stops everything.

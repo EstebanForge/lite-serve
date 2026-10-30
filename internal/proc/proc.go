@@ -23,7 +23,7 @@ var ErrNotRunning = errors.New("not running")
 // pidfile already names a live process. Returns once the process is
 // confirmed alive.
 func Start(bin string, args []string, pidPath, logFile string) error {
-	if _, err := pidLive(pidPath, bin); err == nil {
+	if _, err := pidLive(pidPath, bin, true); err == nil {
 		return fmt.Errorf("already running (pidfile %s)", pidPath)
 	}
 	_ = os.Remove(pidPath)
@@ -50,7 +50,7 @@ func Start(bin string, args []string, pidPath, logFile string) error {
 	// or this loop would see a dead start as alive.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if _, err := pidLive(pidPath, bin); err == nil {
+		if _, err := pidLive(pidPath, bin, true); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -63,7 +63,7 @@ func Start(bin string, args []string, pidPath, logFile string) error {
 // Stop signals the process named by pidPath and waits for it to die,
 // escalating to SIGKILL.
 func Stop(pidPath, bin string) error {
-	pid, err := pidLive(pidPath, bin)
+	pid, err := pidLive(pidPath, bin, true)
 	if err != nil {
 		_ = os.Remove(pidPath)
 		return ErrNotRunning
@@ -91,8 +91,11 @@ func Stop(pidPath, bin string) error {
 	return fmt.Errorf("pid %d ignored SIGKILL", pid)
 }
 
-// PID returns the live pid from pidPath, or ErrNotRunning.
-func PID(pidPath, bin string) (int, error) { return pidLive(pidPath, bin) }
+// PID returns the live pid from pidPath, removing stale files.
+func PID(pidPath, bin string) (int, error) { return pidLive(pidPath, bin, true) }
+
+// Inspect returns the live pid without changing the pidfile.
+func Inspect(pidPath, bin string) (int, error) { return pidLive(pidPath, bin, false) }
 
 // alive reports whether pid exists in any state, zombie included; only
 // used right after we signaled the process ourselves.
@@ -103,14 +106,16 @@ func alive(pid int) bool {
 // pidLive reads the pidfile and confirms the pid is the expected
 // process. A stale pidfile whose pid is dead, or belongs to an
 // unrelated process, is removed and reported as not running.
-func pidLive(pidPath, bin string) (int, error) {
+func pidLive(pidPath, bin string, cleanStale bool) (int, error) {
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
 		return 0, ErrNotRunning
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		_ = os.Remove(pidPath)
+		if cleanStale {
+			_ = os.Remove(pidPath)
+		}
 		return 0, ErrNotRunning
 	}
 	// /proc is Linux-only; ps works on both Linux and macOS. Identity
@@ -126,7 +131,9 @@ func pidLive(pidPath, bin string) (int, error) {
 		comm = strings.Join(fields[1:], " ")
 	}
 	if err != nil || len(fields) < 2 || strings.HasPrefix(fields[0], "Z") || !strings.Contains(comm, filepath.Base(bin)) {
-		_ = os.Remove(pidPath)
+		if cleanStale {
+			_ = os.Remove(pidPath)
+		}
 		return 0, ErrNotRunning
 	}
 	return pid, nil
