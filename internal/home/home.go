@@ -62,6 +62,14 @@ func (h Home) Caddyfile() string {
 	return filepath.Join(h.Run(), "Caddyfile")
 }
 
+func (h Home) SessionWatchPid() string {
+	return filepath.Join(h.Run(), "session-watch.pid")
+}
+
+func (h Home) SessionID() string {
+	return filepath.Join(h.Run(), "session.id")
+}
+
 func (h Home) MkdirAll() error {
 	for _, d := range []string{h.Bin(), h.Run(), h.Log()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {

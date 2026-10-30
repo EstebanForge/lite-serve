@@ -9,6 +9,7 @@
 - WebSocket and hot-reload support through the proxy, plus a useful 502 response when the app is not listening
 - Upstream status in `lserve list`, plus TUI actions to check and change proxy ports
 - Repeatable HTTP and WebSocket e2e test: `test/e2e-proxy.sh ./lserve`
+- Login-session watcher stops FrankenPHP, MySQL, and Mailpit at logout while preserving the project registry
 - `lserve up` in any directory without a `./sites` folder now serves the directory itself as `<dirname>.localhost`; no project layout required
 - `lserve up --dir <sub>` serves a subfolder as the docroot (`lserve restart --dir <sub>` changes it later)
 - macOS: no longer needs a system MySQL or MariaDB. The server (MariaDB 13.0 via pinned Homebrew bottles, dependencies included) downloads automatically on first run, same as Linux. Verified end to end on macOS arm64: MariaDB bootstrap runs directly, no shell in the chain (SIP strips library env there)

@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/EstebanForge/lite-serve/internal/mailpit"
 	"github.com/EstebanForge/lite-serve/internal/proc"
 	"github.com/EstebanForge/lite-serve/internal/registry"
+	"github.com/EstebanForge/lite-serve/internal/session"
 	"github.com/EstebanForge/lite-serve/internal/site"
 	"github.com/EstebanForge/lite-serve/internal/tui"
 )
@@ -116,6 +118,11 @@ func run(cmd string, args []string) error {
 			}
 		}
 		return a.restart(targetDir(rest))
+	case "session-watch":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: lserve session-watch <id>")
+		}
+		return a.watchSession(args[0])
 	case "list":
 		return a.list()
 	case "logs":
@@ -171,6 +178,8 @@ func (a *app) discoverAll() (map[string][]*site.Site, error) {
 // registry is non-empty, or stops everything when it is empty.
 func (a *app) reload() error {
 	if len(a.reg.Projects) == 0 {
+		_ = proc.Stop(a.h.SessionWatchPid(), os.Args[0])
+		_ = os.Remove(a.h.SessionID())
 		_ = proc.Stop(a.h.FrankenPHPpid(), a.franken)
 		return a.db.Stop()
 	}
@@ -335,6 +344,10 @@ func (a *app) up(opts upOptions) error {
 			return err
 		}
 		if unchanged {
+			if err := a.ensureSessionWatcher(); err != nil {
+				_ = a.stopSessionDaemons()
+				return err
+			}
 			fmt.Printf("already serving %s:\n", opts.dir)
 			for _, s := range sites {
 				fmt.Printf("  %s", siteURL(s.Host()))
@@ -388,6 +401,10 @@ func (a *app) up(opts upOptions) error {
 	if pending != nil {
 		fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
 	}
+	if err := a.ensureSessionWatcher(); err != nil {
+		_ = a.stopSessionDaemons()
+		return err
+	}
 	if proxy {
 		s := sites[0]
 		fmt.Printf("serving %s:\n  %s -> %s\n", opts.dir, siteURL(s.Host()), s.Target)
@@ -404,6 +421,47 @@ func (a *app) up(opts upOptions) error {
 		}
 	}
 	return nil
+}
+
+func (a *app) ensureSessionWatcher() error {
+	id, err := session.Current()
+	if err != nil {
+		return err
+	}
+	current, _ := os.ReadFile(a.h.SessionID())
+	if _, err := proc.PID(a.h.SessionWatchPid(), os.Args[0]); err == nil && string(current) == id {
+		return nil
+	}
+	_ = proc.Stop(a.h.SessionWatchPid(), os.Args[0])
+	if err := os.WriteFile(a.h.SessionID(), []byte(id), 0o600); err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return proc.Start(exe, []string{"session-watch", id}, a.h.SessionWatchPid(), filepath.Join(a.h.Log(), "session-watch.log"))
+}
+
+func (a *app) watchSession(id string) error {
+	defer os.Remove(a.h.SessionWatchPid())
+	defer os.Remove(a.h.SessionID())
+	return session.Watch(id, session.Current, a.stopSessionDaemons, 2*time.Second)
+}
+
+func (a *app) stopSessionDaemons() error {
+	var errs []error
+	if err := proc.Stop(a.h.FrankenPHPpid(), a.franken); err != nil && !errors.Is(err, proc.ErrNotRunning) {
+		errs = append(errs, err)
+	}
+	if err := a.db.Stop(); err != nil && !errors.Is(err, proc.ErrNotRunning) {
+		errs = append(errs, err)
+	}
+	mailpitBin := filepath.Join(a.h.Bin(), "mailpit")
+	if err := proc.Stop(filepath.Join(a.h.Run(), "mailpit.pid"), mailpitBin); err != nil && !errors.Is(err, proc.ErrNotRunning) {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func (a *app) daemonConfigUnchanged() (bool, error) {

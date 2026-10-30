@@ -56,6 +56,7 @@ curl -sk https://demo.localhost:8443/
 - `internal/bin` — pinned binary downloads (frankenPHP v1.13.4, Mailpit v1.32.0) with sha256 verification; system `tar` does the extraction.
 - `internal/db` — embedded server, auto-downloaded: pinned MySQL 8.4.5 tarball on linux-amd64; pinned MariaDB 13.0 Homebrew bottles (plus openssl@4 and pcre2 bottles) on darwin-arm64, wired via DYLD_LIBRARY_PATH with no binary patching. Never uses a host-installed server. Datadir is shared under the state dir; one database per project, named after the project directory. Flavor (mysql/mariadb) is detected from `mysqld --version` and drives init and server flags.
 - `internal/proc` — pidfile lifecycle for frankenPHP and mailpit: zombie rejection via `ps` stat, process identity check, SIGTERM then SIGKILL.
+- `internal/session` — per-login watcher identity (logind on Linux, launchd manager on macOS); session loss stops all daemons without removing registered projects.
 - `internal/mailpit` — detached Mailpit on 127.0.0.1:8025/1025 with a port-ready health check.
 - `internal/tui` — bubbletea pickers (projects, mailpit). Logic stays in `cmd/lserve` via injected callbacks; TUI takes data + callbacks. Piped stdout gets a table instead.
 

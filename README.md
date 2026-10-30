@@ -59,6 +59,8 @@ lserve db client    mysql shell into the project database
 
 Multiple projects run at once on one shared daemon. `lserve down` on the last one stops everything.
 
+Sites survive terminal closure but stop at logout. A per-login watcher uses logind on Linux and the user launchd manager on macOS, then stops FrankenPHP, MySQL, and Mailpit. The project registry remains, so the next `lserve up` restores the sites. Nothing starts at boot.
+
 ## Under the hood
 
 - Pinned frankenPHP serves all sites. TLS is a local CA, so the browser warns once per site. This is normal.
