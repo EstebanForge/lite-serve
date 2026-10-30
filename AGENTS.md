@@ -49,8 +49,8 @@ curl -sk https://demo.localhost:8443/
 ## Architecture
 
 - `cmd/lserve/main.go` — all CLI wiring (`up/down/restart/list/logs/mailpit/db`). The `app` struct owns home dir, registry, binary path, and DB handle. `reload()` renders the shared Caddyfile and reloads or starts the daemon.
-- `internal/site` — discovery: with `./sites`, each child becomes `<name>.localhost`; without it the cwd itself becomes one site named by its basename (refuses $HOME and /). Docroot = first of `public/`, `web/`, root with `index.php`/`wp-load.php`; WordPress detected by `wp-load.php`. Pure functions, heavily tested.
-- `internal/caddy` — renders ONE Caddyfile for all registered projects (sorted output; case-insensitive hostname collision detection).
+- `internal/site` — discovery and optional `lserve.json` project config: with `./sites`, each child becomes `<name>.localhost`; without it the cwd itself becomes one site named by its basename (refuses $HOME and /). Proxy mode serves one `localhost:<port>` upstream instead of a docroot. Docroot = first of `public/`, `web/`, root with `index.php`/`wp-load.php`; WordPress detected by `wp-load.php`. Pure functions, heavily tested.
+- `internal/caddy` — renders ONE Caddyfile for all registered projects (sorted output; case-insensitive hostname collision detection), with `php_server` or `reverse_proxy` blocks and friendly upstream errors.
 - `internal/registry` — JSON registry of served projects at `~/.local/state/lite-serve/registry.json`; flock-guarded read-modify-write.
 - `internal/bin` — pinned binary downloads (frankenPHP v1.13.4, Mailpit v1.32.0) with sha256 verification; system `tar` does the extraction.
 - `internal/db` — embedded server, auto-downloaded: pinned MySQL 8.4.5 tarball on linux-amd64; pinned MariaDB 13.0 Homebrew bottles (plus openssl@4 and pcre2 bottles) on darwin-arm64, wired via DYLD_LIBRARY_PATH with no binary patching. Never uses a host-installed server. Datadir is shared under the state dir; one database per project, named after the project directory. Flavor (mysql/mariadb) is detected from `mysqld --version` and drives init and server flags.

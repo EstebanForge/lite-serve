@@ -104,7 +104,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.Title = sel.title
 			m.list.SetItems([]list.Item{
 				item{title: "Restart", desc: "re-discover sites and reload the daemon", action: ActionRestart, dir: sel.dir},
-				item{title: "Stop", desc: "remove from the registry and stop serving", action: ActionStop, dir: sel.dir},
+				item{title: "Remove", desc: "remove from the registry and stop serving", action: ActionStop, dir: sel.dir},
 			})
 			return m, nil
 		}

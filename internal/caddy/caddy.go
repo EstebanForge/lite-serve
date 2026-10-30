@@ -25,6 +25,12 @@ const caddyfileTemplate = `
 https://{{.Host}}:{{$.HTTPSPort}} {
 	bind 127.0.0.1 ::1
 	tls internal
+{{if eq .Mode "proxy" -}}
+	reverse_proxy {{.Target}}
+	handle_errors {
+		respond "Nothing is listening on {{.Target}}. Start your app: {{.StartHint}}" 502
+	}
+{{else -}}
 	root * "{{.DocRoot}}"
 	encode zstd gzip
 {{if .WordPress -}}
@@ -36,6 +42,7 @@ https://{{.Host}}:{{$.HTTPSPort}} {
 	}
 {{else -}}
 	php_server
+{{end -}}
 {{end -}}
 }
 {{end}}

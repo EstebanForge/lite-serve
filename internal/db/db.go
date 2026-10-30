@@ -196,6 +196,21 @@ func (d *DB) initData() error {
 	if err := os.MkdirAll(d.Data, 0o755); err != nil {
 		return err
 	}
+	if d.flavor == "mariadb" && d.Base == "" {
+		tool, err := exec.LookPath("mariadb-install-db")
+		if err != nil {
+			tool, err = exec.LookPath("mysql_install_db")
+		}
+		if err != nil {
+			return fmt.Errorf("mariadb-install-db not found")
+		}
+		out, err := exec.Command(tool, "--datadir="+d.Data,
+			"--auth-root-authentication-method=normal").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("mariadb-install-db: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
 	if d.flavor == "mariadb" {
 		// Bootstrap directly instead of via mariadb-install-db: that
 		// script's shebang runs under SIP-restricted /bin/sh, which

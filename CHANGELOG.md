@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Reverse-proxy mode for Node, Ruby, Python, Go, and other app servers: `lserve up --proxy 3000`
+- Interactive project detection on a TTY, with a visible `lserve.json` project config shared by interactive and scripted flows
+- WebSocket and hot-reload support through the proxy, plus a useful 502 response when the app is not listening
+
+
+## Unreleased
+
 - `lserve up` in any directory without a `./sites` folder now serves the directory itself as `<dirname>.localhost`; no project layout required
 - `lserve up --dir <sub>` serves a subfolder as the docroot (`lserve restart --dir <sub>` changes it later)
 - macOS: no longer needs a system MySQL or MariaDB. The server (MariaDB 13.0 via pinned Homebrew bottles, dependencies included) downloads automatically on first run, same as Linux. Verified end to end on macOS arm64: MariaDB bootstrap runs directly, no shell in the chain (SIP strips library env there)

@@ -26,10 +26,30 @@ That is the whole model. Two ways to serve:
 
 WordPress is detected automatically and gets `WP_HOME`/`WP_SITEURL` injected, so no redirect loops.
 
+Node, Ruby, Python, Go, and other app servers use proxy mode. Run your app as usual; lite-serve gives it HTTPS and a hostname:
+
+```bash
+lserve up --proxy 3000
+# https://myproject.localhost:8443 -> localhost:3000
+npm run dev
+```
+
+On a TTY, `lserve up` detects common app projects and asks for the port. Both paths write a visible, committable `lserve.json`:
+
+```json
+{
+  "mode": "proxy",
+  "port": 3000
+}
+```
+
+After that, bare `lserve up` needs no flags. Scripts without flags stop with the exact proxy command instead of serving the wrong site. WebSockets and hot reload work through the proxy. If the app is down, the site explains how to start it.
+
 ## Commands
 
 ```bash
 lserve up [dir]     serve this directory (background daemon, terminal stays free)
+lserve up --proxy 3000  HTTPS hostname for an app already listening on port 3000
 lserve down         stop serving it
 lserve list         interactive picker on a TTY, table when piped
 lserve logs         tail the server log
@@ -63,4 +83,4 @@ go build -o lserve ./cmd/lserve
 go test ./...
 ```
 
-No Docker. No config files. No daemons named after Greek gods.
+No Docker. No required config files. No daemons named after Greek gods.

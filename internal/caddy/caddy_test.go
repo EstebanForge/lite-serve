@@ -35,6 +35,24 @@ func TestRenderBasicShape(t *testing.T) {
 	}
 }
 
+func TestRenderProxy(t *testing.T) {
+	projects := map[string][]*site.Site{
+		"/srv/app": {{Name: "app", Mode: site.ModeProxy, Target: "localhost:3000", StartHint: "npm run dev"}},
+	}
+	out, err := Render(projects, 8080, 8443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"reverse_proxy localhost:3000", "handle_errors", "npm run dev"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "php_server") {
+		t.Errorf("proxy site got php_server:\n%s", out)
+	}
+}
+
 func TestRenderWordPressEnv(t *testing.T) {
 	projects := map[string][]*site.Site{
 		"/srv/blog": {{Name: "blog", DocRoot: "/srv/blog", WordPress: true}},

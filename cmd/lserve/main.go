@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -55,7 +56,8 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: lserve <command>
 
-  up        serve this directory (background daemon); up --dir <sub> serves <sub> as the docroot
+  up        serve this directory; --proxy <port> proxies to your app, --dir <sub> sets a PHP docroot
+            options: --name <host-label> (with --proxy)
   down      stop serving this directory (or: down <dir>)
   restart   re-discover and reload (or: restart [dir] [--dir <sub>])
   list      running projects: interactive picker, or a table when piped
@@ -94,11 +96,11 @@ func run(cmd string, args []string) error {
 	}
 	switch cmd {
 	case "up":
-		subdir, rest := dirFlag(args)
-		if len(rest) > 0 {
-			return a.up(rest[0], subdir)
+		opts, err := parseUpFlags(args)
+		if err != nil {
+			return err
 		}
-		return a.up(mustWd(), subdir)
+		return a.up(opts)
 	case "down":
 		return a.down(targetDir(args))
 	case "restart":
@@ -240,39 +242,173 @@ func portAnswers(port int) bool {
 	return false
 }
 
-func (a *app) up(dir, subdir string) error {
-	if _, err := site.DiscoverWithDocroot(dir, subdir); err != nil {
+type upOptions struct {
+	dir       string
+	subdir    string
+	name      string
+	proxyPort int
+	proxySet  bool
+}
+
+func parseUpFlags(args []string) (upOptions, error) {
+	opts := upOptions{dir: mustWd()}
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dir", "--proxy", "--name":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("%s needs a value", args[i])
+			}
+			flag, value := args[i], args[i+1]
+			i++
+			switch flag {
+			case "--dir":
+				opts.subdir = value
+			case "--name":
+				opts.name = value
+			case "--proxy":
+				port, err := strconv.Atoi(value)
+				if err != nil {
+					return opts, fmt.Errorf("--proxy wants a port number, got %q", value)
+				}
+				opts.proxyPort, opts.proxySet = port, true
+			}
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return opts, fmt.Errorf("unknown up option %q", args[i])
+			}
+			positional = append(positional, args[i])
+		}
+	}
+	if len(positional) > 1 {
+		return opts, fmt.Errorf("usage: lserve up [dir] [--proxy port|--dir subdir] [--name label]")
+	}
+	if len(positional) == 1 {
+		dir, err := filepath.Abs(positional[0])
+		if err != nil {
+			return opts, err
+		}
+		opts.dir = dir
+	}
+	if opts.proxySet && opts.subdir != "" {
+		return opts, fmt.Errorf("--proxy and --dir cannot be used together")
+	}
+	if opts.name != "" && !opts.proxySet {
+		return opts, fmt.Errorf("--name requires --proxy")
+	}
+	return opts, nil
+}
+
+func (a *app) up(opts upOptions) error {
+	if err := configureProject(opts); err != nil {
 		return err
 	}
-	if err := a.db.EnsureInstalled(); err != nil {
+	sites, err := site.DiscoverWithDocroot(opts.dir, opts.subdir)
+	if err != nil {
 		return err
 	}
-	if err := a.db.Start(); err != nil {
-		return err
+	proxy := len(sites) == 1 && sites[0].Mode == site.ModeProxy
+	if !proxy {
+		if err := a.db.EnsureInstalled(); err != nil {
+			return err
+		}
+		if err := a.db.Start(); err != nil {
+			return err
+		}
+		if err := a.db.EnsureDatabase(projectDB(opts.dir)); err != nil {
+			return err
+		}
 	}
-	if err := a.db.EnsureDatabase(projectDB(dir)); err != nil {
-		return err
-	}
-	if err := a.reg.Add(dir, subdir); err != nil {
+	if err := a.reg.Add(opts.dir, opts.subdir); err != nil {
 		return err
 	}
 	if err := a.reload(); err != nil {
 		// roll back so a collision or bad render leaves no phantom
 		// entry, then reload again: the other projects must not stay
 		// offline because this one failed.
-		_ = a.reg.Remove(dir)
+		_ = a.reg.Remove(opts.dir)
 		_ = a.reload()
 		return err
 	}
-	fmt.Printf("serving %s (db %s):\n", dir, a.db.DSN(projectDB(dir)))
-	projects, _ := a.discoverAll()
-	for _, s := range projects[dir] {
+	if proxy {
+		s := sites[0]
+		fmt.Printf("serving %s:\n  %s -> %s\n", opts.dir, siteURL(s.Host()), s.Target)
+		if !portAnswersTarget(s.Target) {
+			fmt.Printf("  app not listening yet; start it with: %s\n", s.StartHint)
+		}
+		return nil
+	}
+	fmt.Printf("serving %s (db %s):\n", opts.dir, a.db.DSN(projectDB(opts.dir)))
+	for _, s := range sites {
 		fmt.Printf("  %s\n", siteURL(s.Host()))
-		if subdir != "" {
+		if opts.subdir != "" {
 			fmt.Printf("  (docroot: %s)\n", s.DocRoot)
 		}
 	}
 	return nil
+}
+
+func configureProject(opts upOptions) error {
+	cfg, exists, err := site.LoadConfig(opts.dir)
+	if err != nil {
+		return err
+	}
+	if opts.proxySet {
+		cfg.Mode, cfg.Port = site.ModeProxy, opts.proxyPort
+		if opts.name != "" {
+			cfg.Name = opts.name
+		}
+		if err := site.SaveConfig(opts.dir, cfg); err != nil {
+			return err
+		}
+		fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
+		return nil
+	}
+	if exists {
+		return nil
+	}
+	if info, err := os.Stat(filepath.Join(opts.dir, "sites")); err == nil && info.IsDir() {
+		return nil
+	}
+	kind, defaultPort, php := site.Detect(opts.dir)
+	if php || kind == "" {
+		return nil
+	}
+	if !interactive() {
+		return fmt.Errorf("looks like %s; run: lserve up --proxy %d", kind, defaultPort)
+	}
+	fmt.Printf("This looks like a %s project. Proxy to a port? [Y/n]: ", kind)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	cfg.Mode = site.ModePHP
+	if answer == "" || answer == "y" || answer == "yes" {
+		fmt.Printf("Port [%d]: ", defaultPort)
+		portText, _ := reader.ReadString('\n')
+		portText = strings.TrimSpace(portText)
+		cfg.Mode, cfg.Port = site.ModeProxy, defaultPort
+		if portText != "" {
+			port, err := strconv.Atoi(portText)
+			if err != nil {
+				return fmt.Errorf("port must be a number")
+			}
+			cfg.Port = port
+		}
+	}
+	if err := site.SaveConfig(opts.dir, cfg); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
+	return nil
+}
+
+func portAnswersTarget(target string) bool {
+	conn, err := net.DialTimeout("tcp", target, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (a *app) down(dir string) error {
@@ -342,7 +478,14 @@ func (a *app) listItems() ([]tui.ProjectItem, error) {
 		}
 		var hosts []string
 		for _, s := range sites {
-			hosts = append(hosts, siteURL(s.Host()))
+			label := siteURL(s.Host())
+			if s.Mode == site.ModeProxy {
+				label += " -> " + s.Target
+				if s.Kind != "" {
+					label += " (" + s.Kind + ")"
+				}
+			}
+			hosts = append(hosts, label)
 		}
 		items = append(items, tui.ProjectItem{Dir: dir, Sites: hosts})
 	}
@@ -517,8 +660,12 @@ func interactive() bool {
 	if os.Getenv("TERM") == "" || os.Getenv("TERM") == "dumb" {
 		return false
 	}
-	info, err := os.Stdout.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	stdin, err := os.Stdin.Stat()
+	if err != nil || stdin.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	stdout, err := os.Stdout.Stat()
+	return err == nil && stdout.Mode()&os.ModeCharDevice != 0
 }
 
 func waitPort(port int, timeout time.Duration) error {

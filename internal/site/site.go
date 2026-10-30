@@ -18,6 +18,10 @@ type Site struct {
 	Name      string // directory name, becomes the subdomain
 	Root      string // absolute path to the site directory
 	DocRoot   string // absolute path to the document root
+	Mode      string // php (zero value) or proxy
+	Target    string // proxy upstream, localhost:port
+	Kind      string // detected app runtime for display and start hints
+	StartHint string // command that starts a proxy upstream
 	WordPress bool
 }
 
@@ -33,8 +37,23 @@ func Discover(projectDir string) ([]*Site, error) {
 // after projectDir, but serves subdir instead. Overrides are rejected
 // when ./sites exists, where folder names already decide docroots.
 func DiscoverWithDocroot(projectDir, subdir string) ([]*Site, error) {
+	cfg, ok, err := LoadConfig(projectDir)
+	if err != nil {
+		return nil, err
+	}
 	sitesDir := filepath.Join(projectDir, "sites")
-	if info, err := os.Stat(sitesDir); err != nil || !info.IsDir() {
+	_, sitesErr := os.Stat(sitesDir)
+	hasSites := sitesErr == nil
+	if ok && cfg.Mode == ModeProxy {
+		if subdir != "" {
+			return nil, fmt.Errorf("--dir cannot be used with proxy mode")
+		}
+		if hasSites {
+			return nil, fmt.Errorf("proxy mode cannot be used with a ./sites directory")
+		}
+		return discoverProxy(projectDir, cfg)
+	}
+	if !hasSites {
 		return discoverSelf(projectDir, subdir)
 	}
 	if subdir != "" {
@@ -110,6 +129,29 @@ func discoverSelf(projectDir, subdir string) ([]*Site, error) {
 		Root:      abs,
 		DocRoot:   doc,
 		WordPress: fileExists(filepath.Join(doc, "wp-load.php")),
+	}}, nil
+}
+
+func discoverProxy(projectDir string, cfg Config) ([]*Site, error) {
+	abs, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	name := cfg.Name
+	if name == "" {
+		name = filepath.Base(abs)
+		if !validName(name) {
+			return nil, fmt.Errorf("directory name %q is not a valid host label; set name in %s", name, ConfigFile)
+		}
+	}
+	kind, _, _ := Detect(abs)
+	return []*Site{{
+		Name:      name,
+		Root:      abs,
+		Mode:      ModeProxy,
+		Target:    fmt.Sprintf("localhost:%d", cfg.Port),
+		Kind:      kind,
+		StartHint: StartHint(kind, cfg.Port),
 	}}, nil
 }
 
