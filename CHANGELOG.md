@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Repeating an unchanged `lserve up` reports `already serving` and skips the daemon reload
 - PHP and static projects with frontend markers stay on the direct serving path, including `public/`, `web/`, and `--dir` docroots
 - Proxy config and registry changes roll back together after discovery, collision, or reload failures
 - Prompt EOF and invalid answers no longer create configuration

@@ -23,6 +23,8 @@ export DEVENV_HTTPS_PORT=18443
 export DEVENV_HTTP_PORT=18080
 
 "$LSERVE" up "$TMP/app" --proxy 19100 >/dev/null
+again=$("$LSERVE" up "$TMP/app" --proxy 19100)
+printf '%s' "$again" | grep -q 'already serving'
 curl -sSk https://app.localhost:18443/ | grep -q 'Nothing is listening'
 python3 -m http.server 19100 --bind 127.0.0.1 --directory "$TMP/app" >"$TMP/http.log" 2>&1 &
 UPSTREAM_PID=$!

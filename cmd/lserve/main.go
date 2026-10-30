@@ -313,6 +313,39 @@ func (a *app) up(opts upOptions) error {
 	if err != nil {
 		return err
 	}
+	if pending != nil {
+		current, _, err := site.LoadConfig(opts.dir)
+		if err != nil {
+			return err
+		}
+		if current == *pending {
+			pending = nil
+		}
+	}
+	var previous registry.Project
+	registered := false
+	for _, p := range a.reg.Projects {
+		if p.Dir == opts.dir {
+			previous, registered = p, true
+		}
+	}
+	if registered && previous.DocRoot == opts.subdir && pending == nil {
+		unchanged, err := a.daemonConfigUnchanged()
+		if err != nil {
+			return err
+		}
+		if unchanged {
+			fmt.Printf("already serving %s:\n", opts.dir)
+			for _, s := range sites {
+				fmt.Printf("  %s", siteURL(s.Host()))
+				if s.Mode == site.ModeProxy {
+					fmt.Printf(" -> %s", s.Target)
+				}
+				fmt.Println()
+			}
+			return nil
+		}
+	}
 	proxy := len(sites) == 1 && sites[0].Mode == site.ModeProxy
 	if !proxy {
 		if err := a.db.EnsureInstalled(); err != nil {
@@ -323,13 +356,6 @@ func (a *app) up(opts upOptions) error {
 		}
 		if err := a.db.EnsureDatabase(projectDB(opts.dir)); err != nil {
 			return err
-		}
-	}
-	var previous registry.Project
-	registered := false
-	for _, p := range a.reg.Projects {
-		if p.Dir == opts.dir {
-			previous, registered = p, true
 		}
 	}
 	snapshot, err := snapshotConfig(opts.dir)
@@ -378,6 +404,28 @@ func (a *app) up(opts upOptions) error {
 		}
 	}
 	return nil
+}
+
+func (a *app) daemonConfigUnchanged() (bool, error) {
+	if _, err := proc.PID(a.h.FrankenPHPpid(), a.franken); err != nil {
+		return false, nil
+	}
+	projects, err := a.discoverAll()
+	if err != nil {
+		return false, err
+	}
+	want, err := caddy.Render(projects, portEnvInt("DEVENV_HTTP_PORT", 8080), portEnvInt("DEVENV_HTTPS_PORT", 8443))
+	if err != nil {
+		return false, err
+	}
+	current, err := os.ReadFile(a.h.Caddyfile())
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return string(current) == want, nil
 }
 
 type configSnapshot struct {
