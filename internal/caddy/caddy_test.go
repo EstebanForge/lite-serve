@@ -43,7 +43,7 @@ func TestRenderProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"reverse_proxy localhost:3000", "handle_errors", "npm run dev"} {
+	for _, want := range []string{"reverse_proxy localhost:3000", "handle_errors", "npm run dev", "{http.error.status_code} == 502", "Proxy error"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

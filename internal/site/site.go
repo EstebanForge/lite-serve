@@ -37,14 +37,26 @@ func Discover(projectDir string) ([]*Site, error) {
 // after projectDir, but serves subdir instead. Overrides are rejected
 // when ./sites exists, where folder names already decide docroots.
 func DiscoverWithDocroot(projectDir, subdir string) ([]*Site, error) {
-	cfg, ok, err := LoadConfig(projectDir)
+	cfg, _, err := LoadConfig(projectDir)
 	if err != nil {
+		return nil, err
+	}
+	return DiscoverWithConfig(projectDir, subdir, cfg)
+}
+
+// DiscoverWithConfig discovers a project with an explicit in-memory
+// config, so callers can validate a change before writing it.
+func DiscoverWithConfig(projectDir, subdir string, cfg Config) ([]*Site, error) {
+	if cfg.Mode == "" {
+		cfg.Mode = ModePHP
+	}
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	sitesDir := filepath.Join(projectDir, "sites")
 	_, sitesErr := os.Stat(sitesDir)
 	hasSites := sitesErr == nil
-	if ok && cfg.Mode == ModeProxy {
+	if cfg.Mode == ModeProxy {
 		if subdir != "" {
 			return nil, fmt.Errorf("--dir cannot be used with proxy mode")
 		}
@@ -105,8 +117,8 @@ func discoverSelf(projectDir, subdir string) ([]*Site, error) {
 	if err != nil {
 		return nil, err
 	}
-	if home, herr := os.UserHomeDir(); herr == nil && (abs == home || abs == filepath.Dir(home)) {
-		return nil, fmt.Errorf("refusing to serve %s itself; run lserve up inside your project folder (or create a ./sites directory)", abs)
+	if err := guardProjectDir(abs); err != nil {
+		return nil, err
 	}
 	name := filepath.Base(abs)
 	if !validName(name) {
@@ -137,6 +149,9 @@ func discoverProxy(projectDir string, cfg Config) ([]*Site, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := guardProjectDir(abs); err != nil {
+		return nil, err
+	}
 	name := cfg.Name
 	if name == "" {
 		name = filepath.Base(abs)
@@ -153,6 +168,14 @@ func discoverProxy(projectDir string, cfg Config) ([]*Site, error) {
 		Kind:      kind,
 		StartHint: StartHint(kind, cfg.Port),
 	}}, nil
+}
+
+func guardProjectDir(abs string) error {
+	home, err := os.UserHomeDir()
+	if abs == "/" || (err == nil && (abs == home || abs == filepath.Dir(home))) {
+		return fmt.Errorf("refusing to serve %s itself; run lserve up inside your project folder (or create a ./sites directory)", abs)
+	}
+	return nil
 }
 
 // Host is the served hostname for the site.

@@ -7,13 +7,20 @@
 - Reverse-proxy mode for Node, Ruby, Python, Go, and other app servers: `lserve up --proxy 3000`
 - Interactive project detection on a TTY, with a visible `lserve.json` project config shared by interactive and scripted flows
 - WebSocket and hot-reload support through the proxy, plus a useful 502 response when the app is not listening
-
-
-## Unreleased
-
+- Upstream status in `lserve list`, plus TUI actions to check and change proxy ports
+- Repeatable HTTP and WebSocket e2e test: `test/e2e-proxy.sh ./lserve`
 - `lserve up` in any directory without a `./sites` folder now serves the directory itself as `<dirname>.localhost`; no project layout required
 - `lserve up --dir <sub>` serves a subfolder as the docroot (`lserve restart --dir <sub>` changes it later)
 - macOS: no longer needs a system MySQL or MariaDB. The server (MariaDB 13.0 via pinned Homebrew bottles, dependencies included) downloads automatically on first run, same as Linux. Verified end to end on macOS arm64: MariaDB bootstrap runs directly, no shell in the chain (SIP strips library env there)
+
+### Fixed
+
+- PHP and static projects with frontend markers stay on the direct serving path, including `public/`, `web/`, and `--dir` docroots
+- Proxy config and registry changes roll back together after discovery, collision, or reload failures
+- Prompt EOF and invalid answers no longer create configuration
+- Reserved proxy ports follow environment overrides; Go projects default to a valid port
+- Proxy discovery refuses to serve `$HOME` or `/`; non-502 upstream errors keep their real status
+- Fresh installs use the publisher's current release digests for FrankenPHP 1.13.4
 
 ## 0.1.0 - 2026-10-29
 

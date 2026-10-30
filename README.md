@@ -43,7 +43,7 @@ On a TTY, `lserve up` detects common app projects and asks for the port. Both pa
 }
 ```
 
-After that, bare `lserve up` needs no flags. Scripts without flags stop with the exact proxy command instead of serving the wrong site. WebSockets and hot reload work through the proxy. If the app is down, the site explains how to start it.
+After that, bare `lserve up` needs no flags. Scripts without flags stop with the exact proxy command instead of serving the wrong site. WebSockets and hot reload work through the proxy. If the app is down, the site explains how to start it. `lserve list` shows whether each upstream is listening; the interactive menu can check or change its port.
 
 ## Commands
 

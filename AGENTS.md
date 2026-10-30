@@ -35,6 +35,7 @@ go vet ./...                      # static check (the only lint gate)
 gofmt -l .                        # must print nothing
 go test ./...                     # all tests
 go test ./internal/site/ -run TestDiscover  # single package/test
+go build -o lserve ./cmd/lserve && test/e2e-proxy.sh ./lserve  # real HTTP + WebSocket proxy e2e
 ```
 
 Dev-run against a scratch project (tests never touch the real state dir):

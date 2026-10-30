@@ -28,7 +28,9 @@ https://{{.Host}}:{{$.HTTPSPort}} {
 {{if eq .Mode "proxy" -}}
 	reverse_proxy {{.Target}}
 	handle_errors {
-		respond "Nothing is listening on {{.Target}}. Start your app: {{.StartHint}}" 502
+		@bad_gateway expression {http.error.status_code} == 502
+		respond @bad_gateway "Nothing is listening on {{.Target}}. Start your app: {{.StartHint}}" 502
+		respond "Proxy error: {http.error.status_code}" {http.error.status_code}
 	}
 {{else -}}
 	root * "{{.DocRoot}}"

@@ -29,11 +29,11 @@ type asset struct {
 var frankenAssets = map[string]asset{
 	"linux-amd64": {
 		"https://github.com/dunglas/frankenphp/releases/download/" + frankenVersion + "/frankenphp-linux-x86_64",
-		"eddb171ac2caeb1bc54eb858f9ac01d5936582dc15de1990e84b9abedef851dd",
+		"11691b76b0e0dc405ecfd9c18add811a9b6360f2e231cc14ca1634450f7339d2",
 	},
 	"darwin-arm64": {
 		"https://github.com/dunglas/frankenphp/releases/download/" + frankenVersion + "/frankenphp-mac-arm64",
-		"90efcc5df08f955f1e50aec3186334b53d4847a7fd19241d3f43d0cfcf3382e3",
+		"7d28b902043e24bed58b0bd9e8e61d0a9a3114aafdffb6f81d060cd65a19007d",
 	},
 }
 

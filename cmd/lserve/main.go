@@ -300,10 +300,16 @@ func parseUpFlags(args []string) (upOptions, error) {
 }
 
 func (a *app) up(opts upOptions) error {
-	if err := configureProject(opts); err != nil {
+	pending, err := configureProject(opts, os.Stdin, os.Stdout, interactive())
+	if err != nil {
 		return err
 	}
-	sites, err := site.DiscoverWithDocroot(opts.dir, opts.subdir)
+	var sites []*site.Site
+	if pending != nil {
+		sites, err = site.DiscoverWithConfig(opts.dir, opts.subdir, *pending)
+	} else {
+		sites, err = site.DiscoverWithDocroot(opts.dir, opts.subdir)
+	}
 	if err != nil {
 		return err
 	}
@@ -319,16 +325,42 @@ func (a *app) up(opts upOptions) error {
 			return err
 		}
 	}
+	var previous registry.Project
+	registered := false
+	for _, p := range a.reg.Projects {
+		if p.Dir == opts.dir {
+			previous, registered = p, true
+		}
+	}
+	snapshot, err := snapshotConfig(opts.dir)
+	if err != nil {
+		return err
+	}
+	if pending != nil {
+		if err := site.SaveConfig(opts.dir, *pending); err != nil {
+			return err
+		}
+	}
 	if err := a.reg.Add(opts.dir, opts.subdir); err != nil {
+		if pending != nil {
+			_ = snapshot.restore(opts.dir)
+		}
 		return err
 	}
 	if err := a.reload(); err != nil {
-		// roll back so a collision or bad render leaves no phantom
-		// entry, then reload again: the other projects must not stay
-		// offline because this one failed.
-		_ = a.reg.Remove(opts.dir)
+		if registered {
+			_ = a.reg.Add(previous.Dir, previous.DocRoot)
+		} else {
+			_ = a.reg.Remove(opts.dir)
+		}
+		if pending != nil {
+			_ = snapshot.restore(opts.dir)
+		}
 		_ = a.reload()
 		return err
+	}
+	if pending != nil {
+		fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
 	}
 	if proxy {
 		s := sites[0]
@@ -348,58 +380,99 @@ func (a *app) up(opts upOptions) error {
 	return nil
 }
 
-func configureProject(opts upOptions) error {
+type configSnapshot struct {
+	data   []byte
+	exists bool
+}
+
+func snapshotConfig(dir string) (configSnapshot, error) {
+	data, err := os.ReadFile(filepath.Join(dir, site.ConfigFile))
+	if os.IsNotExist(err) {
+		return configSnapshot{}, nil
+	}
+	if err != nil {
+		return configSnapshot{}, err
+	}
+	return configSnapshot{data: data, exists: true}, nil
+}
+
+func (s configSnapshot) restore(dir string) error {
+	path := filepath.Join(dir, site.ConfigFile)
+	if !s.exists {
+		err := os.Remove(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.WriteFile(path, s.data, 0o644)
+}
+
+func configureProject(opts upOptions, input io.Reader, output io.Writer, isInteractive bool) (*site.Config, error) {
 	cfg, exists, err := site.LoadConfig(opts.dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if opts.proxySet {
 		cfg.Mode, cfg.Port = site.ModeProxy, opts.proxyPort
 		if opts.name != "" {
 			cfg.Name = opts.name
 		}
-		if err := site.SaveConfig(opts.dir, cfg); err != nil {
-			return err
-		}
-		fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
-		return nil
+		return &cfg, nil
 	}
 	if exists {
-		return nil
+		return nil, nil
 	}
 	if info, err := os.Stat(filepath.Join(opts.dir, "sites")); err == nil && info.IsDir() {
-		return nil
+		return nil, nil
 	}
-	kind, defaultPort, php := site.Detect(opts.dir)
-	if php || kind == "" {
-		return nil
+	kind, defaultPort, direct := site.DetectWithDocroot(opts.dir, opts.subdir)
+	if direct || kind == "" {
+		return nil, nil
 	}
-	if !interactive() {
-		return fmt.Errorf("looks like %s; run: lserve up --proxy %d", kind, defaultPort)
+	if !isInteractive {
+		return nil, fmt.Errorf("looks like %s; run: lserve up --proxy %d", kind, defaultPort)
 	}
-	fmt.Printf("This looks like a %s project. Proxy to a port? [Y/n]: ", kind)
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	cfg.Mode = site.ModePHP
-	if answer == "" || answer == "y" || answer == "yes" {
-		fmt.Printf("Port [%d]: ", defaultPort)
-		portText, _ := reader.ReadString('\n')
-		portText = strings.TrimSpace(portText)
+	fmt.Fprintf(output, "This looks like a %s project. Proxy to a port? [Y/n]: ", kind)
+	reader := bufio.NewReader(input)
+	answer, err := readPromptLine(reader)
+	if err != nil {
+		return nil, fmt.Errorf("proxy prompt: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "", "y", "yes":
 		cfg.Mode, cfg.Port = site.ModeProxy, defaultPort
-		if portText != "" {
-			port, err := strconv.Atoi(portText)
-			if err != nil {
-				return fmt.Errorf("port must be a number")
-			}
-			cfg.Port = port
+	case "n", "no":
+		cfg.Mode = site.ModePHP
+		return &cfg, nil
+	default:
+		return nil, fmt.Errorf("answer y or n")
+	}
+	fmt.Fprintf(output, "Port [%d]: ", defaultPort)
+	portText, err := readPromptLine(reader)
+	if err != nil {
+		return nil, fmt.Errorf("port prompt: %w", err)
+	}
+	portText = strings.TrimSpace(portText)
+	if portText != "" {
+		port, err := strconv.Atoi(portText)
+		if err != nil {
+			return nil, fmt.Errorf("port must be a number")
 		}
+		cfg.Port = port
 	}
-	if err := site.SaveConfig(opts.dir, cfg); err != nil {
-		return err
+	return &cfg, nil
+}
+
+func readPromptLine(reader *bufio.Reader) (string, error) {
+	text, err := reader.ReadString('\n')
+	if err == io.EOF && text != "" {
+		return text, nil
 	}
-	fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
-	return nil
+	if err != nil {
+		return "", err
+	}
+	return text, nil
 }
 
 func portAnswersTarget(target string) bool {
@@ -433,6 +506,9 @@ func (a *app) restart(dir string) error {
 	if !a.reg.Has(dir) {
 		return fmt.Errorf("%s is not served by lserve (see: lserve list)", dir)
 	}
+	if _, err := site.DiscoverWithDocroot(dir, a.reg.DocRoot(dir)); err != nil {
+		return fmt.Errorf("%s: %w", dir, err)
+	}
 	if err := a.reload(); err != nil {
 		return err
 	}
@@ -453,16 +529,35 @@ func (a *app) list() error {
 		}
 		return nil
 	}
-	return tui.RunProjects(items, daemonState(daemonPID, daemonErr == nil), func(dir, action string) string {
-		var err error
+	return tui.RunProjects(items, daemonState(daemonPID, daemonErr == nil), func(dir, action, value string) string {
 		switch action {
 		case tui.ActionRestart:
-			err = a.restart(dir)
+			err := a.restart(dir)
+			if err != nil {
+				return "error: " + err.Error()
+			}
 		case tui.ActionStop:
-			err = a.down(dir)
-		}
-		if err != nil {
-			return err.Error()
+			err := a.down(dir)
+			if err != nil {
+				return "error: " + err.Error()
+			}
+		case tui.ActionCheck:
+			sites, err := site.DiscoverWithDocroot(dir, a.reg.DocRoot(dir))
+			if err != nil {
+				return "error: " + err.Error()
+			}
+			if len(sites) == 1 && portAnswersTarget(sites[0].Target) {
+				return "upstream is listening on " + sites[0].Target
+			}
+			return "upstream is not listening"
+		case tui.ActionChange:
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return "error: port must be a number"
+			}
+			if err := a.changeProxyPort(dir, port); err != nil {
+				return "error: " + err.Error()
+			}
 		}
 		return "done"
 	})
@@ -477,19 +572,53 @@ func (a *app) listItems() ([]tui.ProjectItem, error) {
 			continue
 		}
 		var hosts []string
+		proxy := false
 		for _, s := range sites {
 			label := siteURL(s.Host())
 			if s.Mode == site.ModeProxy {
+				proxy = true
 				label += " -> " + s.Target
+				if portAnswersTarget(s.Target) {
+					label += " [up]"
+				} else {
+					label += " [down]"
+				}
 				if s.Kind != "" {
 					label += " (" + s.Kind + ")"
 				}
 			}
 			hosts = append(hosts, label)
 		}
-		items = append(items, tui.ProjectItem{Dir: dir, Sites: hosts})
+		items = append(items, tui.ProjectItem{Dir: dir, Sites: hosts, Proxy: proxy})
 	}
 	return items, nil
+}
+
+func (a *app) changeProxyPort(dir string, port int) error {
+	cfg, _, err := site.LoadConfig(dir)
+	if err != nil {
+		return err
+	}
+	if cfg.Mode != site.ModeProxy {
+		return fmt.Errorf("%s is not a proxy project", dir)
+	}
+	cfg.Port = port
+	if _, err := site.DiscoverWithConfig(dir, a.reg.DocRoot(dir), cfg); err != nil {
+		return err
+	}
+	snapshot, err := snapshotConfig(dir)
+	if err != nil {
+		return err
+	}
+	if err := site.SaveConfig(dir, cfg); err != nil {
+		return err
+	}
+	if err := a.reload(); err != nil {
+		_ = snapshot.restore(dir)
+		_ = a.reload()
+		return err
+	}
+	return nil
 }
 
 func (a *app) logs(args []string) error {
@@ -630,7 +759,7 @@ func (a *app) mailpitCmd(args []string) error {
 			return a.mailpitStatusString(m)
 		}
 		if err != nil {
-			return err.Error()
+			return "error: " + err.Error()
 		}
 		return "done"
 	})
