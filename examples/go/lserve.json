@@ -1,0 +1,5 @@
+{
+  "mode": "proxy",
+  "port": 8081,
+  "name": "hello-go"
+}
