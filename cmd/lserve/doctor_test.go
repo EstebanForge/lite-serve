@@ -26,6 +26,14 @@ func TestDoctorReportSeverity(t *testing.T) {
 	}
 }
 
+func TestDoctorReportTreatsOptionalConflictAsWarning(t *testing.T) {
+	check := diagnoseOptionalPort("Mailpit", 8025, true, false)
+	report := doctorReport{check}
+	if report.Failed() {
+		t.Fatal("optional service conflict failed doctor")
+	}
+}
+
 func TestPortOwnedByAnotherProcessFails(t *testing.T) {
 	check := diagnosePort("HTTPS", 8443, true, false)
 	if check.Status != doctorFail || !strings.Contains(check.Detail, "another process") {

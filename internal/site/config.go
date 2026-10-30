@@ -55,7 +55,38 @@ func SaveConfig(projectDir string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(projectDir, ConfigFile), append(b, '\n'), 0o644)
+	return WriteConfig(projectDir, append(b, '\n'))
+}
+
+// WriteConfig atomically replaces project config and preserves its mode.
+func WriteConfig(projectDir string, data []byte) error {
+	path := filepath.Join(projectDir, ConfigFile)
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(projectDir, ".lserve.json-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (c Config) Validate() error {

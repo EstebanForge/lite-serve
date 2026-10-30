@@ -58,7 +58,7 @@ lserve db client    mysql shell into the project database
 lserve doctor       check installation, ports, session, daemons, and projects
 ```
 
-Multiple projects run at once on one shared daemon. `lserve down` on the last one stops everything.
+Multiple projects run at once on one shared daemon. `lserve down` on the last one stops everything. `lserve doctor` is read-only and exits nonzero when required checks fail.
 
 Sites survive terminal closure but stop at logout. A per-login watcher uses logind on Linux and the user launchd manager on macOS, then stops FrankenPHP, MySQL, and Mailpit. The project registry remains, so the next `lserve up` restores the sites. Nothing starts at boot.
 

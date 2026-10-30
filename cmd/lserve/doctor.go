@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/EstebanForge/lite-serve/internal/caddy"
 	"github.com/EstebanForge/lite-serve/internal/home"
@@ -48,7 +50,7 @@ func (r doctorReport) Write(w io.Writer) {
 }
 
 func runDoctor() error {
-	h, err := home.Dir()
+	h, err := home.Path()
 	if err != nil {
 		return err
 	}
@@ -99,13 +101,18 @@ func runDoctor() error {
 	checkBinary("mysqld", filepath.Join(h.Root(), "mysql", "bin", "mysqld"), true)
 	checkBinary("mailpit", filepath.Join(h.Bin(), "mailpit"), false)
 
+	currentSessionID := ""
 	if id, err := session.Current(); err != nil {
 		add(doctorFail, "login session", err.Error())
 	} else {
+		currentSessionID = id
 		add(doctorOK, "login session", id)
 	}
-	if ips, err := net.LookupIP("lserve-doctor.localhost"); err != nil || !loopbackOnly(ips) {
-		add(doctorFail, "localhost DNS", "lserve-doctor.localhost does not resolve only to loopback")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ips, dnsErr := net.DefaultResolver.LookupIP(ctx, "ip", "lserve-doctor.localhost")
+	cancel()
+	if dnsErr != nil || !loopbackOnly(ips) {
+		add(doctorWarn, "localhost DNS", "wildcard lookup failed; browsers may still resolve .localhost directly")
 	} else {
 		add(doctorOK, "localhost DNS", "resolves to loopback")
 	}
@@ -120,7 +127,10 @@ func runDoctor() error {
 		report = append(report, check)
 	}
 	addPort("HTTPS port", httpsPort, frankenRunning)
-	addPort("HTTP port", httpPort, false)
+	addOptionalPort := func(name string, port int, owned bool) {
+		report = append(report, diagnoseOptionalPort(name, port, portAnswers(port), owned))
+	}
+	addOptionalPort("HTTP port", httpPort, false)
 	if frankenRunning {
 		add(doctorOK, "frankenphp", "running")
 	} else {
@@ -130,25 +140,45 @@ func runDoctor() error {
 	mysqlBin := filepath.Join(h.Bin(), "mysqld")
 	_, mysqlErr := proc.Inspect(filepath.Join(h.Run(), "mysql", "mysqld.pid"), mysqlBin)
 	mysqlRunning := mysqlErr == nil
-	addPort("database port", portEnvInt("DEVENV_DB_PORT", 3306), mysqlRunning)
+	addOptionalPort("database port", portEnvInt("DEVENV_DB_PORT", 3306), mysqlRunning)
 	mailpitBin := filepath.Join(h.Bin(), "mailpit")
 	_, mailpitErr := proc.Inspect(filepath.Join(h.Run(), "mailpit.pid"), mailpitBin)
 	mailpitRunning := mailpitErr == nil
-	addPort("mailpit UI port", portEnvInt("DEVENV_MAILPIT_UI_PORT", 8025), mailpitRunning)
-	addPort("mailpit SMTP port", portEnvInt("DEVENV_MAILPIT_SMTP_PORT", 1025), mailpitRunning)
+	addOptionalPort("mailpit UI port", portEnvInt("DEVENV_MAILPIT_UI_PORT", 8025), mailpitRunning)
+	addOptionalPort("mailpit SMTP port", portEnvInt("DEVENV_MAILPIT_SMTP_PORT", 1025), mailpitRunning)
+
+	watcherRunning := false
+	if exe, err := os.Executable(); err == nil {
+		_, err = proc.Inspect(h.SessionWatchPid(), exe)
+		watcherRunning = err == nil
+	}
+	storedSession, _ := os.ReadFile(h.SessionID())
+	switch {
+	case watcherRunning && string(storedSession) != currentSessionID:
+		add(doctorOK, "session watcher", "owned by login session "+string(storedSession))
+	case watcherRunning:
+		add(doctorOK, "session watcher", "running for session "+currentSessionID)
+	case frankenRunning || mysqlRunning || mailpitRunning:
+		add(doctorFail, "session watcher", "daemons are running without a watcher")
+	default:
+		add(doctorWarn, "session watcher", "stopped")
+	}
 
 	reg, err := registry.Open(h.Root())
 	if err != nil {
 		add(doctorFail, "registry", err.Error())
 	} else {
 		projects := map[string][]*site.Site{}
+		validProjects, invalidProjects := 0, 0
 		for _, project := range reg.Projects {
 			sites, err := site.DiscoverWithDocroot(project.Dir, project.DocRoot)
 			if err != nil {
 				add(doctorFail, "project", project.Dir+": "+err.Error())
+				invalidProjects++
 				continue
 			}
 			projects[project.Dir] = sites
+			validProjects++
 			for _, s := range sites {
 				if s.Mode == site.ModeProxy && !portAnswersTarget(s.Target) {
 					add(doctorWarn, "proxy upstream", s.Host()+" -> "+s.Target+" is not listening")
@@ -157,10 +187,12 @@ func runDoctor() error {
 		}
 		if len(reg.Projects) == 0 {
 			add(doctorOK, "registry", "no projects registered")
+		} else if invalidProjects > 0 {
+			add(doctorFail, "registry", fmt.Sprintf("%d valid, %d invalid", validProjects, invalidProjects))
 		} else if _, err := caddy.Render(projects, httpPort, httpsPort); err != nil {
 			add(doctorFail, "registry", err.Error())
 		} else {
-			add(doctorOK, "registry", fmt.Sprintf("%d project(s) valid", len(reg.Projects)))
+			add(doctorOK, "registry", fmt.Sprintf("%d project(s) valid", validProjects))
 		}
 	}
 
@@ -176,7 +208,7 @@ func diagnosePort(name string, port int, answering, owned bool) doctorCheck {
 	switch {
 	case answering && owned:
 		check.Status = doctorOK
-		check.Detail = fmt.Sprintf("%d in use by lserve", port)
+		check.Detail = fmt.Sprintf("%d answers; lserve process is running", port)
 	case answering:
 		check.Status = doctorFail
 		check.Detail = fmt.Sprintf("%d in use by another process", port)
@@ -186,6 +218,15 @@ func diagnosePort(name string, port int, answering, owned bool) doctorCheck {
 	default:
 		check.Status = doctorOK
 		check.Detail = fmt.Sprintf("%d free", port)
+	}
+	return check
+}
+
+func diagnoseOptionalPort(name string, port int, answering, owned bool) doctorCheck {
+	check := diagnosePort(name, port, answering, owned)
+	if check.Status == doctorFail && !owned {
+		check.Status = doctorWarn
+		check.Detail += "; service is not running"
 	}
 	return check
 }

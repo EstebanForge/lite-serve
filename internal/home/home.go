@@ -16,16 +16,23 @@ type Home struct {
 	root string
 }
 
-func Dir() (Home, error) {
+// Path resolves state without migration or filesystem changes.
+func Path() (Home, error) {
 	if v := os.Getenv("DEVENV_HOME"); v != "" {
 		return Home{v}, nil
 	}
-	migrate()
 	h, err := os.UserHomeDir()
 	if err != nil {
 		return Home{}, err
 	}
 	return Home{filepath.Join(h, ".local", "state", "lite-serve")}, nil
+}
+
+func Dir() (Home, error) {
+	if os.Getenv("DEVENV_HOME") == "" {
+		migrate()
+	}
+	return Path()
 }
 
 // migrate moves a pre-rename state dir (lite-devenv) into place once,

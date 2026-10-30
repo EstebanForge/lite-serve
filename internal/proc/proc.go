@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -122,15 +121,14 @@ func pidLive(pidPath, bin string, cleanStale bool) (int, error) {
 	// check matters because a stale pidfile can point at an unrelated
 	// process that reused the pid. The stat field rejects zombies,
 	// which this package never reaps after cmd.Start.
-	out, err := exec.Command("ps", "-o", "stat=", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.Command("ps", "-o", "stat=", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 	fields := strings.Fields(string(out))
-	// comm can contain spaces (paths on macOS); join the tail so a
-	// spaced path is not mistaken for a different process.
-	comm := ""
+	args := ""
 	if len(fields) >= 2 {
-		comm = strings.Join(fields[1:], " ")
+		args = strings.Join(fields[1:], " ")
 	}
-	if err != nil || len(fields) < 2 || strings.HasPrefix(fields[0], "Z") || !strings.Contains(comm, filepath.Base(bin)) {
+	identityMatches := args == bin || strings.HasPrefix(args, bin+" ")
+	if err != nil || len(fields) < 2 || strings.HasPrefix(fields[0], "Z") || !identityMatches {
 		if cleanStale {
 			_ = os.Remove(pidPath)
 		}

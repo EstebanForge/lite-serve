@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/EstebanForge/lite-serve/internal/bin"
@@ -110,6 +111,9 @@ func run(cmd string, args []string) error {
 	case "down":
 		return a.down(targetDir(args))
 	case "restart":
+		if _, err := session.Current(); err != nil {
+			return fmt.Errorf("cannot restart session-bound services: %w", err)
+		}
 		subdir, rest := dirFlag(args)
 		if subdir != "" {
 			d := targetDir(rest)
@@ -182,9 +186,13 @@ func (a *app) discoverAll() (map[string][]*site.Site, error) {
 // registry is non-empty, or stops everything when it is empty.
 func (a *app) reload() error {
 	if len(a.reg.Projects) == 0 {
-		_ = proc.Stop(a.h.SessionWatchPid(), os.Args[0])
+		if exe, err := os.Executable(); err == nil {
+			_ = proc.Stop(a.h.SessionWatchPid(), exe)
+		}
 		_ = os.Remove(a.h.SessionID())
 		_ = proc.Stop(a.h.FrankenPHPpid(), a.franken)
+		mailpitBin := filepath.Join(a.h.Bin(), "mailpit")
+		_ = proc.Stop(filepath.Join(a.h.Run(), "mailpit.pid"), mailpitBin)
 		return a.db.Stop()
 	}
 	projects, err := a.discoverAll()
@@ -313,6 +321,9 @@ func parseUpFlags(args []string) (upOptions, error) {
 }
 
 func (a *app) up(opts upOptions) error {
+	if _, err := session.Current(); err != nil {
+		return fmt.Errorf("cannot start session-bound services: %w", err)
+	}
 	pending, err := configureProject(opts, os.Stdin, os.Stdout, interactive())
 	if err != nil {
 		return err
@@ -348,6 +359,21 @@ func (a *app) up(opts upOptions) error {
 			return err
 		}
 		if unchanged {
+			if err := a.waitDaemonUp(); err != nil {
+				return fmt.Errorf("configuration is unchanged but frankenphp is unhealthy; run lserve restart: %w", err)
+			}
+			proxy := len(sites) == 1 && sites[0].Mode == site.ModeProxy
+			if !proxy {
+				if err := a.db.EnsureInstalled(); err != nil {
+					return err
+				}
+				if err := a.db.Start(); err != nil {
+					return err
+				}
+				if err := a.db.EnsureDatabase(projectDB(opts.dir)); err != nil {
+					return err
+				}
+			}
 			if err := a.ensureSessionWatcher(); err != nil {
 				_ = a.stopSessionDaemons()
 				return err
@@ -396,11 +422,12 @@ func (a *app) up(opts upOptions) error {
 		} else {
 			_ = a.reg.Remove(opts.dir)
 		}
+		var restoreErr error
 		if pending != nil {
-			_ = snapshot.restore(opts.dir)
+			restoreErr = snapshot.restore(opts.dir)
 		}
-		_ = a.reload()
-		return err
+		recoveryErr := a.reload()
+		return errors.Join(err, restoreErr, recoveryErr)
 	}
 	if pending != nil {
 		fmt.Printf("wrote %s\n", filepath.Join(opts.dir, site.ConfigFile))
@@ -428,23 +455,35 @@ func (a *app) up(opts upOptions) error {
 }
 
 func (a *app) ensureSessionWatcher() error {
-	id, err := session.Current()
+	lock, err := os.OpenFile(a.h.SessionWatchPid()+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
-	current, _ := os.ReadFile(a.h.SessionID())
-	if _, err := proc.PID(a.h.SessionWatchPid(), os.Args[0]); err == nil && string(current) == id {
-		return nil
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
 	}
-	_ = proc.Stop(a.h.SessionWatchPid(), os.Args[0])
-	if err := os.WriteFile(a.h.SessionID(), []byte(id), 0o600); err != nil {
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	id, err := session.Current()
+	if err != nil {
 		return err
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	return proc.Start(exe, []string{"session-watch", id}, a.h.SessionWatchPid(), filepath.Join(a.h.Log(), "session-watch.log"))
+	if _, err := proc.PID(a.h.SessionWatchPid(), exe); err == nil {
+		// A second login shares the daemons but never steals their owner.
+		return nil
+	}
+	if err := os.WriteFile(a.h.SessionID(), []byte(id), 0o600); err != nil {
+		return err
+	}
+	if err := proc.Start(exe, []string{"session-watch", id}, a.h.SessionWatchPid(), filepath.Join(a.h.Log(), "session-watch.log")); err != nil {
+		_ = os.Remove(a.h.SessionID())
+		return err
+	}
+	return nil
 }
 
 func (a *app) watchSession(id string) error {
@@ -515,7 +554,7 @@ func (s configSnapshot) restore(dir string) error {
 		}
 		return err
 	}
-	return os.WriteFile(path, s.data, 0o644)
+	return site.WriteConfig(dir, s.data)
 }
 
 func configureProject(opts upOptions, input io.Reader, output io.Writer, isInteractive bool) (*site.Config, error) {
@@ -613,6 +652,9 @@ func (a *app) down(dir string) error {
 }
 
 func (a *app) restart(dir string) error {
+	if _, err := session.Current(); err != nil {
+		return fmt.Errorf("cannot restart session-bound services: %w", err)
+	}
 	if !a.reg.Has(dir) {
 		return fmt.Errorf("%s is not served by lserve (see: lserve list)", dir)
 	}
@@ -620,6 +662,10 @@ func (a *app) restart(dir string) error {
 		return fmt.Errorf("%s: %w", dir, err)
 	}
 	if err := a.reload(); err != nil {
+		return err
+	}
+	if err := a.ensureSessionWatcher(); err != nil {
+		_ = a.stopSessionDaemons()
 		return err
 	}
 	fmt.Println("reloaded")
@@ -705,6 +751,9 @@ func (a *app) listItems() ([]tui.ProjectItem, error) {
 }
 
 func (a *app) changeProxyPort(dir string, port int) error {
+	if _, err := session.Current(); err != nil {
+		return fmt.Errorf("cannot restart session-bound services: %w", err)
+	}
 	cfg, _, err := site.LoadConfig(dir)
 	if err != nil {
 		return err
@@ -724,8 +773,13 @@ func (a *app) changeProxyPort(dir string, port int) error {
 		return err
 	}
 	if err := a.reload(); err != nil {
+		restoreErr := snapshot.restore(dir)
+		recoveryErr := a.reload()
+		return errors.Join(err, restoreErr, recoveryErr)
+	}
+	if err := a.ensureSessionWatcher(); err != nil {
 		_ = snapshot.restore(dir)
-		_ = a.reload()
+		_ = a.stopSessionDaemons()
 		return err
 	}
 	return nil
@@ -772,6 +826,9 @@ func (a *app) runDB(database string, args []string) error {
 		fmt.Println(a.db.DSN(database))
 		return nil
 	}
+	if _, err := session.Current(); err != nil {
+		return fmt.Errorf("cannot start session-bound services: %w", err)
+	}
 	if err := a.db.EnsureInstalled(); err != nil {
 		return err
 	}
@@ -779,6 +836,10 @@ func (a *app) runDB(database string, args []string) error {
 		return err
 	}
 	if err := a.db.EnsureDatabase(database); err != nil {
+		return err
+	}
+	if err := a.ensureSessionWatcher(); err != nil {
+		_ = a.stopSessionDaemons()
 		return err
 	}
 	switch args[0] {
@@ -823,7 +884,14 @@ func (a *app) mailpitCmd(args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "start":
+			if _, err := session.Current(); err != nil {
+				return fmt.Errorf("cannot start session-bound services: %w", err)
+			}
 			if err := m.Start(); err != nil {
+				return err
+			}
+			if err := a.ensureSessionWatcher(); err != nil {
+				_ = a.stopSessionDaemons()
 				return err
 			}
 			fmt.Printf("mailpit up: %s (smtp 127.0.0.1:%d)\n", m.UIURL(), m.SMTPPort)
@@ -835,8 +903,15 @@ func (a *app) mailpitCmd(args []string) error {
 			fmt.Println("mailpit stopped")
 			return nil
 		case "restart":
+			if _, err := session.Current(); err != nil {
+				return fmt.Errorf("cannot restart session-bound services: %w", err)
+			}
 			_ = m.Stop()
 			if err := m.Start(); err != nil {
+				return err
+			}
+			if err := a.ensureSessionWatcher(); err != nil {
+				_ = a.stopSessionDaemons()
 				return err
 			}
 			fmt.Printf("mailpit restarted: %s\n", m.UIURL())
@@ -859,12 +934,32 @@ func (a *app) mailpitCmd(args []string) error {
 		var err error
 		switch action {
 		case tui.ActionStart:
+			if _, sessionErr := session.Current(); sessionErr != nil {
+				err = sessionErr
+				break
+			}
 			err = m.Start()
+			if err == nil {
+				if watcherErr := a.ensureSessionWatcher(); watcherErr != nil {
+					_ = a.stopSessionDaemons()
+					err = watcherErr
+				}
+			}
 		case tui.ActionStop:
 			err = m.Stop()
 		case tui.ActionRestart:
+			if _, sessionErr := session.Current(); sessionErr != nil {
+				err = sessionErr
+				break
+			}
 			_ = m.Stop()
 			err = m.Start()
+			if err == nil {
+				if watcherErr := a.ensureSessionWatcher(); watcherErr != nil {
+					_ = a.stopSessionDaemons()
+					err = watcherErr
+				}
+			}
 		case tui.ActionStatus:
 			return a.mailpitStatusString(m)
 		}

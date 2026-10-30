@@ -11,6 +11,9 @@
 - Repeatable HTTP and WebSocket e2e test: `test/e2e-proxy.sh ./lserve`
 - Login-session watcher stops FrankenPHP, MySQL, and Mailpit at logout while preserving the project registry
 - Read-only `lserve doctor` checks platform, binaries, DNS, ports, session tracking, daemon health, registry projects, and proxy upstreams
+- Session ownership survives additional logins, every daemon-start path restores the watcher, Linux logout checks session state, and transient logind errors no longer stop sites
+- Repeated `up` repairs MySQL and verifies HTTPS health; final `down` also stops Mailpit
+- Doctor no longer migrates state or fails on unused optional ports; project config writes and rollback are atomic
 - `lserve up` in any directory without a `./sites` folder now serves the directory itself as `<dirname>.localhost`; no project layout required
 - `lserve up --dir <sub>` serves a subfolder as the docroot (`lserve restart --dir <sub>` changes it later)
 - macOS: no longer needs a system MySQL or MariaDB. The server (MariaDB 13.0 via pinned Homebrew bottles, dependencies included) downloads automatically on first run, same as Linux. Verified end to end on macOS arm64: MariaDB bootstrap runs directly, no shell in the chain (SIP strips library env there)
