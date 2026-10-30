@@ -19,24 +19,14 @@ esac
 
 mkdir -p "$DEST"
 
-tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' || true)"
-
-if [[ -n "$tag" ]]; then
-  url="https://github.com/$REPO/releases/download/$tag/$asset"
-  tmp="$BIN.tmp"
-  curl -fsSL "$url" -o "$tmp"
-  chmod +x "$tmp"
-  mv -f "$tmp" "$BIN"
-  echo "installed $BIN ($tag, $asset)"
-else
-  echo "no release found; building from source with go install"
-  if ! command -v go >/dev/null 2>&1; then
-    echo "go is required to build from source: https://go.dev/dl/" >&2
-    exit 1
-  fi
-  GOBIN="$DEST" go install -ldflags "-X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" "github.com/$REPO/cmd/lserve@latest"
-  echo "installed $BIN (built from source)"
-fi
+# latest/download resolves the release without an API request, so
+# unauthenticated API rate limits cannot break installation.
+url="https://github.com/$REPO/releases/latest/download/$asset"
+tmp="$BIN.tmp"
+curl -fsSL "$url" -o "$tmp"
+chmod +x "$tmp"
+mv -f "$tmp" "$BIN"
+echo "installed $BIN (latest, $asset)"
 
 # Prove which build landed: version includes the build timestamp.
 "$BIN" version || true
