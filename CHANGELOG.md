@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-11-06
+
+Every existing directory URL now resolves its own index.php.
+
+### Fixed
+
+- `https://<project>.localhost/wp-admin/` and any other existing `/subdir/` URL returned an empty 404: Caddy 2.11's `php_server` expansion matched the directory before its own `index.php`, dead-ending at a bare `file_server`. The render now overrides `try_files` with `{path}/index.php` first, keeping the bare `index.php` fallback last so front-controller routing still works
+
 ## 0.2.0 - 2026-11-06
 
 Port safety, correct database startup, and current pinned assets.

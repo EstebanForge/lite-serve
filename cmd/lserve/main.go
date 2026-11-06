@@ -47,7 +47,7 @@ func main() {
 		os.Exit(2)
 	}
 	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
-		fmt.Printf("lserve 0.2.0 (built %s)\n", buildTime)
+		fmt.Printf("lserve 0.2.1 (built %s)\n", buildTime)
 		return
 	}
 	if err := run(args[0], args[1:]); err != nil {
