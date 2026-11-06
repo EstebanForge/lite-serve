@@ -93,14 +93,11 @@ func (a *app) oursAmong(row portRow, h ports.Holder) bool {
 	return false
 }
 
-func formatHolder(h ports.Holder) string {
-	if h.Container != nil {
-		out := fmt.Sprintf("%s: %s (%s)", h.Container.Engine, h.Container.Name, h.Container.Image)
-		if len(h.PIDs) > 0 {
-			out += fmt.Sprintf(", pid %d %s", h.PIDs[0], h.Process)
-		}
-		return out
-	}
+func containerLabel(c ports.Container) string {
+	return fmt.Sprintf("%s: %s (%s)", c.Engine, c.Name, c.Image)
+}
+
+func plainPidParts(h ports.Holder) []string {
 	var parts []string
 	for i, pid := range h.PIDs {
 		name := h.Process
@@ -108,6 +105,21 @@ func formatHolder(h ports.Holder) string {
 			name = names[i]
 		}
 		parts = append(parts, fmt.Sprintf("pid %d %s", pid, name))
+	}
+	return parts
+}
+
+func formatHolder(h ports.Holder) string {
+	var parts []string
+	for i, c := range h.Containers {
+		label := containerLabel(c)
+		if i == 0 && len(h.PIDs) > 0 {
+			label += fmt.Sprintf(", pid %d %s", h.PIDs[0], h.Process)
+		}
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		parts = plainPidParts(h)
 	}
 	if len(parts) == 0 {
 		return "unidentified process (no permission to inspect it)"
@@ -117,57 +129,91 @@ func formatHolder(h ports.Holder) string {
 
 // preflight refuses to start services while foreign holders block the
 // ports they need. Interactive sessions may clear the port by stopping
-// a container or SIGTERM-ing a plain process after an explicit yes;
+// containers or SIGTERM-ing plain processes after an explicit yes;
 // lserve never signals its own pidfile-owned processes and never kills
 // anything in a non-interactive run.
 func (a *app) preflight(rows []portRow) error {
 	var in *bufio.Reader
 	for _, row := range rows {
-		if !ports.Held(row.port) {
-			continue
-		}
-		h := ports.Identify(row.port)
-		if a.oursAmong(row, h) {
-			continue
-		}
-		fmt.Printf("port %d (%s) is held by:\n  %s\n", row.port, row.label, formatHolder(h))
-		refuse := func() error {
-			return fmt.Errorf("port %d (%s) stays held; free it or set %s", row.port, row.label, row.env)
-		}
-		if !interactive() {
-			return refuse()
-		}
-		switch {
-		case h.Container != nil:
-			fmt.Printf("Stop %s container %s? [y/N] ", h.Container.Engine, h.Container.Name)
-		case len(h.PIDs) > 0:
-			fmt.Printf("Send SIGTERM to pid %d (%s)? [y/N] ", h.PIDs[0], h.Process)
-		default:
-			return refuse()
-		}
-		if in == nil {
-			in = bufio.NewReader(os.Stdin)
-		}
-		answer, err := readPromptLine(in)
-		if err != nil || !wantsStop(answer) {
-			return refuse()
-		}
-		if h.Container != nil {
-			if err := ports.StopContainers([]ports.Container{*h.Container}, row.port); err != nil {
-				return err
-			}
-			fmt.Printf("stopped %s\n", h.Container.Name)
-			continue
-		}
-		if err := syscall.Kill(h.PIDs[0], syscall.SIGTERM); err != nil {
-			return refuse()
-		}
-		if !ports.WaitFree(row.port, 15*time.Second) {
-			return fmt.Errorf("pid %d ignored SIGTERM; port %d (%s) stays held; free it or set %s",
-				h.PIDs[0], row.port, row.label, row.env)
+		if err := a.resolveRow(row, &in); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// resolveRow clears one clashing port. A port can need several rounds:
+// SO_REUSEPORT puts several listeners on one port, and a container
+// with a restart policy respawns. Three rounds cover that; then it
+// aborts. The re-identify round after every action shows who actually
+// still holds the port, so no stale pid is ever signaled from an old
+// attribution.
+func (a *app) resolveRow(row portRow, in **bufio.Reader) error {
+	for range 3 {
+		if !ports.Held(row.port) {
+			return nil
+		}
+		h := ports.Identify(row.port)
+		if a.oursAmong(row, h) {
+			return nil
+		}
+		fmt.Printf("port %d (%s) is held by:\n  %s\n", row.port, row.label, formatHolder(h))
+		if !interactive() {
+			return refuse(row)
+		}
+		switch {
+		case len(h.Containers) > 0:
+			labels := make([]string, len(h.Containers))
+			for i, c := range h.Containers {
+				labels[i] = containerLabel(c)
+			}
+			fmt.Printf("Stop %s? [y/N] ", strings.Join(labels, ", "))
+		case len(h.PIDs) > 0:
+			fmt.Printf("Send SIGTERM to %s? [y/N] ", strings.Join(plainPidParts(h), ", "))
+		default:
+			return refuse(row)
+		}
+		if *in == nil {
+			*in = bufio.NewReader(os.Stdin)
+		}
+		answer, err := readPromptLine(*in)
+		if err != nil || !wantsStop(answer) {
+			return refuse(row)
+		}
+		if len(h.Containers) > 0 {
+			if err := ports.StopContainers(h.Containers, row.port); err != nil {
+				return err
+			}
+			names := make([]string, len(h.Containers))
+			for i, c := range h.Containers {
+				names[i] = c.Name
+			}
+			fmt.Printf("stopped %s\n", strings.Join(names, ", "))
+			continue
+		}
+		signaled := 0
+		for _, pid := range h.PIDs {
+			// A 0 pid here would signal lserve's own process group.
+			if pid <= 0 {
+				continue
+			}
+			if syscall.Kill(pid, syscall.SIGTERM) == nil {
+				signaled++
+			}
+		}
+		if signaled == 0 {
+			continue
+		}
+		if !ports.WaitFree(row.port, 15*time.Second) {
+			continue
+		}
+		return nil
+	}
+	return refuse(row)
+}
+
+func refuse(row portRow) error {
+	return fmt.Errorf("port %d (%s) stays held; free it or set %s", row.port, row.label, row.env)
 }
 
 func wantsStop(answer string) bool {

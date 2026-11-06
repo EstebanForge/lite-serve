@@ -18,18 +18,29 @@ func TestFormatHolder(t *testing.T) {
 				Port:    3306,
 				PIDs:    []int{751782},
 				Process: "rootlessport",
-				Container: &ports.Container{
+				Containers: []ports.Container{{
 					Engine: "podman",
 					ID:     "515e982b8474",
 					Name:   "wicket-wp-stack_mariadb_1",
 					Image:  "docker.io/library/mariadb:10.11",
-				},
+				}},
 			},
 			want: "podman: wicket-wp-stack_mariadb_1 (docker.io/library/mariadb:10.11), pid 751782 rootlessport",
 		},
 		{
+			name: "two containers",
+			holder: ports.Holder{
+				Port: 443,
+				Containers: []ports.Container{
+					{Engine: "podman", ID: "a", Name: "edge", Image: "caddy"},
+					{Engine: "docker", ID: "b", Name: "web", Image: "nginx"},
+				},
+			},
+			want: "podman: edge (caddy), docker: web (nginx)",
+		},
+		{
 			name:   "container without pid",
-			holder: ports.Holder{Port: 443, Container: &ports.Container{Engine: "docker", ID: "abc", Name: "web", Image: "nginx"}},
+			holder: ports.Holder{Port: 443, Containers: []ports.Container{{Engine: "docker", ID: "abc", Name: "web", Image: "nginx"}}},
 			want:   "docker: web (nginx)",
 		},
 		{

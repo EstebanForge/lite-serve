@@ -82,6 +82,13 @@ curl 401 esteban    5u  IPv4  0xc0a1b2      0t0  TCP 127.0.0.1:55123->127.0.0.1:
 			names: "mysqld",
 		},
 		{
+			name:  "space-named process shifts fields and drops the line",
+			port:  3306,
+			out:   "my app 955 esteban   30u  IPv6  0xd0a1b2      0t0  TCP 127.0.0.1:3306 (LISTEN)\nmysqld 955 esteban   31u  IPv6  0xd0a1b3      0t0  TCP [::1]:3306 (LISTEN)",
+			pids:  []int{955},
+			names: "mysqld",
+		},
+		{
 			name:  "empty output",
 			port:  8025,
 			out:   "",

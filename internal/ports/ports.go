@@ -27,10 +27,10 @@ type Container struct {
 
 // Holder describes everything lserve managed to learn about a port.
 type Holder struct {
-	Port      int
-	PIDs      []int
-	Process   string     // comma-joined listener names; empty when unreadable
-	Container *Container // non-nil when a container publishes this port
+	Port       int
+	PIDs       []int
+	Process    string      // comma-joined listener names; empty when unreadable
+	Containers []Container // every container publishing this port
 }
 
 var ssUser = regexp.MustCompile(`\("([^"]+)",pid=(\d+)`)
@@ -72,10 +72,7 @@ func Identify(port int) Holder {
 	li := listeners(port)
 	h.PIDs = li.pids
 	h.Process = li.names
-	for _, c := range mergeContainers(containerMatches("docker", port), containerMatches("podman", port)) {
-		h.Container = &c
-		break
-	}
+	h.Containers = mergeContainers(containerMatches("docker", port), containerMatches("podman", port))
 	return h
 }
 
@@ -94,7 +91,7 @@ func StopContainers(cs []Container, port int) error {
 		return fmt.Errorf("stop containers: %v", errs)
 	}
 	if !WaitFree(port, 10*time.Second) {
-		return fmt.Errorf("stopped %s but port %d is still held; a restart policy may have respawned it", strings.Join(names(cs), ", "), port)
+		return fmt.Errorf("stopped %s but port %d is still held", strings.Join(names(cs), ", "), port)
 	}
 	return nil
 }
@@ -163,10 +160,15 @@ func parseLsof(out string, port int) listenerInfo {
 		if _, p, err := net.SplitHostPort(name); err != nil || p != strconv.Itoa(port) {
 			continue
 		}
-		pid := f[1]
-		if !seen[pid] {
-			seen[pid] = true
-			li.pids = append(li.pids, atoi(pid))
+		pid := atoi(f[1])
+		// lsof columns shift when a process name contains spaces; a
+		// non-numeric pid field must drop the line, not signal pid 0.
+		if pid <= 0 {
+			continue
+		}
+		if !seen[f[1]] {
+			seen[f[1]] = true
+			li.pids = append(li.pids, pid)
 			li.names = joinName(li.names, f[0])
 		}
 	}
