@@ -8,6 +8,7 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -487,11 +488,14 @@ func pidAlive(pid int) bool {
 
 // mysqldExited reports pid dead, counting zombies as dead: the started
 // child is never reaped (no Wait), so a crashed mysqld stays a zombie
-// that kill(pid, 0) still answers. Same discipline as proc.pidLive.
+// that kill(pid, 0) still answers. Same discipline as proc.pidLive. A
+// ps spawn failure says nothing about the process, so it counts as
+// alive and the loop times out instead of killing a healthy start.
 func mysqldExited(pid int) bool {
 	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return true
+	var exitErr *exec.ExitError
+	if err != nil && !errors.As(err, &exitErr) {
+		return false
 	}
 	fields := strings.Fields(string(out))
 	return len(fields) == 0 || strings.HasPrefix(fields[0], "Z")
