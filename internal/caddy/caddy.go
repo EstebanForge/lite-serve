@@ -35,15 +35,20 @@ https://{{.Host}}:{{$.HTTPSPort}} {
 {{else -}}
 	root * "{{.DocRoot}}"
 	encode zstd gzip
+	# Caddy 2.11 php_server matches an existing directory before its own
+	# index.php, so every /subdir/ request 404s at file_server.
 {{if .WordPress -}}
 	# WP_HOME/WP_SITEURL injected inside php_server: frankenphp worker
 	# mode does not reliably inherit parent env.
 	php_server {
 		env WP_HOME {{siteURL $.HTTPSPort .Host}}
 		env WP_SITEURL {{siteURL $.HTTPSPort .Host}}
+		try_files {path}/index.php {path} index.php
 	}
 {{else -}}
-	php_server
+	php_server {
+		try_files {path}/index.php {path} index.php
+	}
 {{end -}}
 {{end -}}
 }

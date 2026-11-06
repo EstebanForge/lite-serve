@@ -21,7 +21,7 @@ func TestRenderBasicShape(t *testing.T) {
 		"bind 127.0.0.1 ::1",
 		"tls internal",
 		`root * "/srv/demo/public"`,
-		"php_server\n", // non-WP: bare directive, no env block
+		"php_server {", // non-WP: no env block
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -32,6 +32,30 @@ func TestRenderBasicShape(t *testing.T) {
 	}
 	if strings.Contains(out, "WP_HOME") {
 		t.Errorf("non-WP site got WP env:\n%s", out)
+	}
+}
+
+func TestRenderDirectoryIndex(t *testing.T) {
+	const tryFiles = "try_files {path}/index.php {path} index.php"
+	wordpress := map[string][]*site.Site{
+		"/srv/blog": {{Name: "blog", DocRoot: "/srv/blog", WordPress: true}},
+	}
+	out, err := Render(wordpress, 80, 8443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, tryFiles) {
+		t.Errorf("WP site missing directory-index try_files:\n%s", out)
+	}
+	plain := map[string][]*site.Site{
+		"/srv/demo": {{Name: "demo", DocRoot: "/srv/demo/public"}},
+	}
+	out, err = Render(plain, 80, 8443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, tryFiles) {
+		t.Errorf("non-WP site missing directory-index try_files:\n%s", out)
 	}
 }
 
