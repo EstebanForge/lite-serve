@@ -64,6 +64,7 @@ func usage() {
   down      stop serving this directory (or: down <dir>)
   restart   re-discover and reload (or: restart [dir] [--dir <sub>])
   list      running projects: interactive picker, or a table when piped
+  ports     who holds each lserve port: free, ours, or held by what (read-only)
   logs      tail the frankenphp log (or: logs mailpit)
   mailpit   mailpit menu: start|stop|restart|status (interactive when a TTY)
   db        client|import <dump.sql>|dump [file]|dsn
@@ -97,17 +98,28 @@ func run(cmd string, args []string) error {
 	if cmd == "doctor" {
 		return runDoctor()
 	}
+	if cmd == "up" {
+		opts, err := parseUpFlags(args)
+		if err != nil {
+			return err
+		}
+		// Clash refusal must precede newApp: app construction downloads
+		// the 177MB frankenphp binary, and a user with a squatted port
+		// should not pay for it.
+		if err := earlyPreflight(); err != nil {
+			return err
+		}
+		a, err := newApp()
+		if err != nil {
+			return err
+		}
+		return a.up(opts)
+	}
 	a, err := newApp()
 	if err != nil {
 		return err
 	}
 	switch cmd {
-	case "up":
-		opts, err := parseUpFlags(args)
-		if err != nil {
-			return err
-		}
-		return a.up(opts)
 	case "down":
 		return a.down(targetDir(args))
 	case "restart":
@@ -133,6 +145,8 @@ func run(cmd string, args []string) error {
 		return a.watchSession(args[0])
 	case "list":
 		return a.list()
+	case "ports":
+		return a.portsReport()
 	case "logs":
 		return a.logs(args)
 	case "mailpit":
@@ -352,6 +366,13 @@ func (a *app) up(opts upOptions) error {
 		if p.Dir == opts.dir {
 			previous, registered = p, true
 		}
+	}
+	needed := portRows()[:2]
+	if !(len(sites) == 1 && sites[0].Mode == site.ModeProxy) {
+		needed = append(needed, portRows()[2])
+	}
+	if err := a.preflight(needed); err != nil {
+		return err
 	}
 	if registered && previous.DocRoot == opts.subdir && pending == nil {
 		unchanged, err := a.daemonConfigUnchanged()
@@ -887,6 +908,9 @@ func (a *app) mailpitCmd(args []string) error {
 			if _, err := session.Current(); err != nil {
 				return fmt.Errorf("cannot start session-bound services: %w", err)
 			}
+			if err := a.preflight(portRows()[3:]); err != nil {
+				return err
+			}
 			if err := m.Start(); err != nil {
 				return err
 			}
@@ -907,6 +931,9 @@ func (a *app) mailpitCmd(args []string) error {
 				return fmt.Errorf("cannot restart session-bound services: %w", err)
 			}
 			_ = m.Stop()
+			if err := a.preflight(portRows()[3:]); err != nil {
+				return err
+			}
 			if err := m.Start(); err != nil {
 				return err
 			}

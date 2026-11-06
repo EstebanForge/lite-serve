@@ -320,6 +320,9 @@ func (d *DB) Start() error {
 // Running reports whether mysqld is live.
 func (d *DB) Running() bool { return d.live() }
 
+// PID returns the pidfile pid of our mysqld, 0 when it is not running.
+func (d *DB) PID() int { return d.pid() }
+
 // Stop signals mysqld if live.
 func (d *DB) Stop() error {
 	pid := d.pid()

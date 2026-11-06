@@ -72,7 +72,9 @@ State dir: `~/.local/state/lite-serve/` (`bin/`, `run/`, `log/`, `mysql-data/`, 
 - Never index a pinned-asset map before the platform check (panic on unsupported OS). New binaries need a pin + sha256 per platform in `internal/bin`.
 - MySQL connects as root with empty password (dev-only, `--initialize-insecure`); wp-config must use `127.0.0.1:3306`, not `localhost` (socket mismatch).
 - TLS is Caddy internal CA; first visit per host shows a browser warning. This is expected.
-- `lsof` is not used anywhere (macOS has no `-s` flag); process checks go through `ps`.
+- `lsof` is not used anywhere (macOS has no `-s` flag); process checks go through `ps`. Exception: `internal/ports` listener attribution on darwin uses `lsof -nP -iTCP:<port> -sTCP:LISTEN` (state-filter form only, never the bare `-s`); Linux uses `ss -Htlnp`.
+- Port clashes are diagnosed by `internal/ports` (dial probe for held, ss/lsof for pids, docker/podman `ps` published-port matching for containers) and resolved in `cmd/lserve/ports_cmd.go`: `up` and `mailpit start` refuse on foreign holders; interactive sessions may stop the blocking container or SIGTERM a plain process after an explicit `y`; non-interactive runs never stop anything; lserve's own pidfile-owned processes are always exempt. `oursAmong` requires our pid to be among the port's actual listeners, not merely alive (a mysqld on another port must not claim the row).
+- `newApp()` downloads the 177MB frankenphp binary on first use for EVERY command. `up` must therefore run `earlyPreflight()` before `newApp()` so a squatted web port fails in under 100ms with no download; keep that ordering if you touch `run()`.
 - Tests: stdlib `testing` only, colocated `*_test.go`, table-driven where sensible. Test discovery and rendering logic here; process lifecycle is covered by e2e scripts, not unit tests.
 - Module path, repo dir, and state dir are all `lite-serve`; only the legacy state dir name `lite-devenv` survives, in `internal/home` migration code.
 
