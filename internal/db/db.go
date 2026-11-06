@@ -297,22 +297,23 @@ func (d *DB) Start() error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start mysqld: %w", err)
 	}
+	started := cmd.Process.Pid
 	for range 100 {
-		if d.ping() {
+		// A foreign server on this port answers ping too (podman port
+		// publishers), so success also requires our pidfile pid.
+		if pid := d.pid(); pid != 0 && d.ping() {
 			return nil
 		}
-		// A pidfile that exists but whose process is gone means a real
-		// startup failure. No pidfile yet just means mysqld has not
-		// finished forking; the pid from cmd.Start may not match the
-		// final daemon pid.
 		if data, err := os.ReadFile(d.pidfile()); err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && !pidAlive(pid) {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && mysqldExited(pid) {
 				return fmt.Errorf("mysqld exited during startup; see %s", filepath.Join(d.LogDir, "mysqld-error.log"))
 			}
+		} else if mysqldExited(started) {
+			return fmt.Errorf("mysqld exited during startup; see %s", filepath.Join(d.LogDir, "mysqld-error.log"))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("mysqld did not answer ping in 20s; see %s", filepath.Join(d.LogDir, "mysqld-error.log"))
+	return fmt.Errorf("mysqld did not become ready in 20s (is port %d taken by another server?); see %s", d.Port, filepath.Join(d.LogDir, "mysqld-error.log"))
 }
 
 // Running reports whether mysqld is live.
@@ -482,4 +483,16 @@ func (d *DB) exec(sql string) (string, error) {
 
 func pidAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
+}
+
+// mysqldExited reports pid dead, counting zombies as dead: the started
+// child is never reaped (no Wait), so a crashed mysqld stays a zombie
+// that kill(pid, 0) still answers. Same discipline as proc.pidLive.
+func mysqldExited(pid int) bool {
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return true
+	}
+	fields := strings.Fields(string(out))
+	return len(fields) == 0 || strings.HasPrefix(fields[0], "Z")
 }
