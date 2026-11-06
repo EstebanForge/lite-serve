@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 - 2026-11-06
+
+Port safety, correct database startup, and current pinned assets.
+
+### Added
+
+- Port preflight before `up` and `mailpit start`: every port the command needs is checked first, and a foreign holder is named — the pid and process, or the docker or podman container publishing the port
+- Interactive clash resolution on a TTY: after an explicit yes, lserve stops the blocking container or SIGTERMs the plain process holder and re-checks the port; several listeners on one port are offered together, holders that exit while the prompt waits are handled, and every container publishing a port is stopped; non-interactive runs never stop anything and abort with the diagnostics and the environment override that frees the port
+- Read-only `lserve ports` table reporting each lserve port as free, ours (a pidfile-owned lserve process), or held with full holder attribution
+- Web-port clashes refuse before any binary download, so a doomed `up` fails in milliseconds instead of after a full FrankenPHP download
+- `up` preflight skips the database port for proxy-only projects, and Mailpit start and restart check their own ports
+
+### Fixed
+
+- FrankenPHP v1.13.4 assets re-pinned after the upstream release was rebuilt; downloads verify against the current digests at the canonical php/frankenphp URLs, and the darwin-arm64 digest was verified by direct download
+- Database startup no longer accepts a foreign server answering the DB port: success requires our own mysqld pid alive and answering, so a container squatting the port fails in seconds with the port named instead of reporting false success or silently using the wrong database
+- A `ps` failure during database startup counts as unknown, not as a mysqld exit, so transient failures cannot abort a healthy start
+
 ## 0.1.0 - 2026-10-29
 
 First release. Valet-style local development for PHP and application servers, without Docker.
